@@ -1,0 +1,12 @@
+{
+  "name": "abastecimento-bmtop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sistema de gestao de combustivel do posto interno BMTOP.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.731.1"
+  }
+}

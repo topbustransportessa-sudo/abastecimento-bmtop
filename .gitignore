@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+server.log
+server-error.log
+
+.vercel
+.codex-build/
+.codex-finalizer/
+outputs/
+supabase/.temp/
