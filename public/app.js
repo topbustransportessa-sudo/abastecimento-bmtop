@@ -812,12 +812,12 @@ function renderFuelingForm() {
       </div>
       <div class="form-grid">
         <div class="field"><label>Data e hora</label><input value="${formatDate(new Date().toISOString())}" readonly></div>
-        <div class="field vehicle-combobox"><label>Veículo</label><input data-vehicle-search type="search" placeholder="Digite prefixo, placa ou descrição" autocomplete="off" required><input name="vehicleId" type="hidden"><div class="vehicle-last-km" data-last-km-info></div><div class="vehicle-suggestions hidden" data-vehicle-suggestions></div></div>
+        <div class="field vehicle-combobox"><label>Veículo</label><input data-vehicle-search type="search" placeholder="Digite prefixo, placa ou descrição" autocomplete="off" required><input name="vehicleId" type="hidden"><div class="vehicle-suggestions hidden" data-vehicle-suggestions></div></div>
         <div class="field"><label>Foto do carro</label><input name="vehiclePhoto" type="file" accept="image/*" capture="environment" required></div>
         <div class="mobile-photo-preview hidden" data-photo-preview-for="vehiclePhoto"></div>
         <div class="field"><label>Foto do tacógrafo</label><input name="tachographPhoto" type="file" accept="image/*" capture="environment" required></div>
         <div class="mobile-photo-preview hidden" data-photo-preview-for="tachographPhoto"></div>
-        <div class="field full hidden" data-after-photo="tachographPhoto"><label>Km atual</label><input name="km" type="number" min="0" step="1" required disabled></div>
+        <div class="field full hidden" data-after-photo="tachographPhoto"><label>Km atual</label><input name="km" type="number" min="0" step="1" required disabled><div class="km-guidance" data-km-guidance></div></div>
         <div class="field"><label>Bomba</label><select name="pump" required><option value="">Selecione</option>${pumpOptions()}</select></div>
         <div class="field"><label>Foto do encerrante</label><input name="pumpPhoto" type="file" accept="image/*" capture="environment" required></div>
         <div class="mobile-photo-preview hidden" data-photo-preview-for="pumpPhoto"></div>
@@ -1707,14 +1707,7 @@ function bindVehicleSearches() {
   document.querySelectorAll("[data-vehicle-search]").forEach((input) => {
     const hidden = input.parentElement.querySelector("input[name='vehicleId']");
     const suggestions = input.parentElement.querySelector("[data-vehicle-suggestions]");
-    const lastKmInfo = input.parentElement.querySelector("[data-last-km-info]");
-    const updateLastKmInfo = () => {
-      if (!lastKmInfo) return;
-      const last = latestFuelingForVehicle(hidden.value);
-      lastKmInfo.innerHTML = last
-        ? `Último km lançado: <strong>${moneyless(last.km)}</strong> em ${formatDate(last.createdAt)}.`
-        : hidden.value ? "Sem abastecimento anterior registrado para este veículo." : "";
-    };
+    const form = input.closest("form");
     const renderSuggestions = () => {
       const results = vehicleSearchResults(input.value);
       suggestions.innerHTML = results.length
@@ -1729,7 +1722,7 @@ function bindVehicleSearches() {
           input.value = vehicleSearchLabel(vehicle);
           hidden.value = vehicle.id;
           input.setCustomValidity("");
-          updateLastKmInfo();
+          updateFuelingKmGuidance(form);
           suggestions.classList.add("hidden");
           input.blur();
         });
@@ -1739,7 +1732,7 @@ function bindVehicleSearches() {
       const vehicle = vehicleBySearchLabel(input.value);
       hidden.value = vehicle?.id || "";
       input.setCustomValidity(input.value && !vehicle ? "Selecione um veículo válido da lista." : "");
-      updateLastKmInfo();
+      updateFuelingKmGuidance(form);
     };
     input.addEventListener("input", () => {
       syncVehicle();
@@ -1749,7 +1742,7 @@ function bindVehicleSearches() {
     input.addEventListener("blur", () => setTimeout(() => suggestions.classList.add("hidden"), 140));
     input.addEventListener("change", syncVehicle);
     syncVehicle();
-    updateLastKmInfo();
+    updateFuelingKmGuidance(form);
   });
 }
 
@@ -1778,6 +1771,7 @@ function bindFuelingPhotoFlow() {
           nextField.classList.add("hidden");
           nextInput.disabled = true;
           nextInput.value = "";
+          if (name === "tachographPhoto") updateFuelingKmGuidance(form);
         }
         return;
       }
@@ -1788,6 +1782,7 @@ function bindFuelingPhotoFlow() {
       if (nextField && nextInput) {
         nextField.classList.remove("hidden");
         nextInput.disabled = false;
+        if (name === "tachographPhoto") updateFuelingKmGuidance(form);
         setTimeout(() => nextInput.focus(), 120);
       }
     });
@@ -2002,8 +1997,32 @@ async function onEditFueling(event) {
   }
 }
 
+function updateFuelingKmGuidance(form) {
+  if (!form) return;
+  const guidance = form.querySelector("[data-km-guidance]");
+  if (!guidance) return;
+  const vehicleId = form.querySelector("input[name='vehicleId']")?.value || "";
+  const kmValue = form.querySelector("input[name='km']")?.value || "";
+  const last = latestFuelingForVehicle(vehicleId);
+  guidance.classList.remove("danger");
+  if (!vehicleId) {
+    guidance.textContent = "";
+    return;
+  }
+  if (!last) {
+    guidance.textContent = "Sem abastecimento anterior registrado para este veículo.";
+    return;
+  }
+  guidance.innerHTML = `Último km lançado: <strong>${moneyless(last.km)}</strong> em ${formatDate(last.createdAt)}.`;
+  if (kmValue && Number(kmValue) < Number(last.km)) {
+    guidance.classList.add("danger");
+    guidance.innerHTML = `Atenção: km informado inferior ao último km lançado (${moneyless(last.km)} em ${formatDate(last.createdAt)}).`;
+  }
+}
+
 function previewFueling(event) {
   const form = event.currentTarget;
+  updateFuelingKmGuidance(form);
   const preview = form.querySelector("[data-live-preview]");
   const data = Object.fromEntries(new FormData(form));
   if (!data.vehicleId || !data.km || !data.liters) {

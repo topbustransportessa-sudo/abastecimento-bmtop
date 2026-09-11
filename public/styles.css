@@ -350,15 +350,21 @@ button {
   font-weight: 650;
 }
 
-.vehicle-last-km {
+.km-guidance {
   min-height: 20px;
   color: var(--muted);
   font-size: 0.85rem;
   line-height: 1.25;
 }
 
-.vehicle-last-km strong {
+.km-guidance strong {
   color: var(--ink);
+}
+
+.km-guidance.danger,
+.km-guidance.danger strong {
+  color: var(--bad);
+  font-weight: 750;
 }
 
 .field.full {
