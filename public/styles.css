@@ -361,8 +361,12 @@ button {
   color: var(--ink);
 }
 
-.km-guidance.danger,
-.km-guidance.danger strong {
+.km-guidance .km-preview-line {
+  margin-top: 3px;
+}
+
+.km-guidance .km-alert {
+  margin-top: 3px;
   color: var(--bad);
   font-weight: 750;
 }

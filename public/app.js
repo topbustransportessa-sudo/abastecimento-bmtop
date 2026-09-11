@@ -2003,8 +2003,8 @@ function updateFuelingKmGuidance(form) {
   if (!guidance) return;
   const vehicleId = form.querySelector("input[name='vehicleId']")?.value || "";
   const kmValue = form.querySelector("input[name='km']")?.value || "";
+  const litersValue = form.querySelector("input[name='liters']")?.value || "";
   const last = latestFuelingForVehicle(vehicleId);
-  guidance.classList.remove("danger");
   if (!vehicleId) {
     guidance.textContent = "";
     return;
@@ -2013,10 +2013,24 @@ function updateFuelingKmGuidance(form) {
     guidance.textContent = "Sem abastecimento anterior registrado para este veículo.";
     return;
   }
-  guidance.innerHTML = `Último km lançado: <strong>${moneyless(last.km)}</strong> em ${formatDate(last.createdAt)}.`;
-  if (kmValue && Number(kmValue) < Number(last.km)) {
-    guidance.classList.add("danger");
-    guidance.innerHTML = `Atenção: km informado inferior ao último km lançado (${moneyless(last.km)} em ${formatDate(last.createdAt)}).`;
+  const parts = [`<div>Último km lançado: <strong>${moneyless(last.km)}</strong> em ${formatDate(last.createdAt)}.</div>`];
+  const hasKm = kmValue !== "";
+  const hasLiters = litersValue !== "";
+  if (hasKm) {
+    const distance = Number(kmValue) - Number(last.km);
+    parts.push(`<div class="km-preview-line">Km rodado prévio: <strong>${moneyless(distance)}</strong>.</div>`);
+    if (hasLiters && Number(litersValue) > 0) {
+      const ghost = { id: "preview", createdAt: new Date().toISOString(), vehicleId, km: Number(kmValue), liters: Number(litersValue) };
+      const status = consumptionStatus(ghost);
+      const average = distance > 0 ? distance / Number(litersValue) : 0;
+      parts.push(`<div class="km-preview-line">Média prévia: <strong>${formatNumber(average)} km/l</strong> <span class="badge ${status.className}">${status.label}</span></div>`);
+    } else {
+      parts.push(`<div class="km-preview-line">Informe os litros para calcular a média prévia.</div>`);
+    }
+  }
+  guidance.innerHTML = parts.join("");
+  if (hasKm && Number(kmValue) < Number(last.km)) {
+    guidance.innerHTML += `<div class="km-alert">Atenção: km informado inferior ao último km lançado.</div>`;
   }
 }
 
@@ -2024,25 +2038,7 @@ function previewFueling(event) {
   const form = event.currentTarget;
   updateFuelingKmGuidance(form);
   const preview = form.querySelector("[data-live-preview]");
-  const data = Object.fromEntries(new FormData(form));
-  if (!data.vehicleId || !data.km || !data.liters) {
-    preview.textContent = "";
-    return;
-  }
-  const ghost = { id: "preview", createdAt: new Date().toISOString(), vehicleId: data.vehicleId, km: Number(data.km), liters: Number(data.liters) };
-  const previous = previousFueling(ghost);
-  if (!previous) {
-    preview.textContent = "Primeiro abastecimento desse veículo: a média será calculada no próximo lançamento.";
-    return;
-  }
-  const distance = Number(data.km) - Number(previous.km);
-  if (distance <= 0) {
-    preview.textContent = `Atenção: km atual não avançou em relação ao último km (${moneyless(previous.km)}). Possível odômetro parado.`;
-    return;
-  }
-  const average = distance / Number(data.liters);
-  const vehicle = vehicleById(data.vehicleId);
-  preview.textContent = `Prévia: ${formatNumber(average)} km/l. Faixa do veículo: ${formatNumber(vehicle.minAvg)} a ${formatNumber(vehicle.maxAvg)} km/l.`;
+  if (preview) preview.textContent = "";
 }
 
 async function onVehicle(event) {
