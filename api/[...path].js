@@ -127,6 +127,12 @@ function mapClosing(row) {
   };
 }
 
+function pumpClosingKind(row) {
+  if (Number(row.initial || 0) > 0 && Number(row.final || 0) > 0) return "both";
+  if (Number(row.final || 0) > 0) return "final";
+  return "initial";
+}
+
 function mapDieselTank(row) {
   return {
     id: row.id,
@@ -524,6 +530,19 @@ async function handle(req, res) {
       }
     }
     const photo = await uploadPhoto(body.photo, "pump-closings");
+    if (body.replaceId) {
+      const existingRows = await supabase(`pump_closings?id=eq.${encodeURIComponent(body.replaceId)}&select=*`);
+      const existing = existingRows[0];
+      if (!existing) return send(res, 404, { error: "Encerrante para substituicao nao encontrado." });
+      if (existing.pump !== body.pump || pumpClosingKind(existing) !== body.kind) {
+        return send(res, 400, { error: "O encerrante selecionado nao corresponde a mesma bomba e tipo." });
+      }
+      const rows = await supabase(`pump_closings?id=eq.${encodeURIComponent(body.replaceId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ date, pump: body.pump, initial, final, photo_url: photo, created_at: createdAt.toISOString(), user_id: user.id }),
+      });
+      return send(res, 200, { closing: mapClosing(rows[0]), replaced: true });
+    }
     const rows = await supabase("pump_closings", {
       method: "POST",
       body: JSON.stringify({ date, pump: body.pump, initial, final, photo_url: photo, created_at: createdAt.toISOString(), user_id: user.id }),

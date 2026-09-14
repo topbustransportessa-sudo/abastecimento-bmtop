@@ -437,6 +437,41 @@ function closingTime(item) {
   return Number.isFinite(time) ? time : 0;
 }
 
+function lastItem(items) {
+  return items.length ? items[items.length - 1] : null;
+}
+
+function closingDuplicateCandidate(pump, kind, createdAt, ignoreId = "") {
+  const time = new Date(createdAt).getTime();
+  if (!Number.isFinite(time)) return null;
+  const items = state.pumpClosings
+    .filter((item) => item.pump === pump && item.id !== ignoreId)
+    .sort((a, b) => closingTime(a) - closingTime(b));
+  if (kind === "initial") {
+    const previous = lastItem(items.filter((item) => closingTime(item) <= time));
+    return previous && closingKind(previous) === "initial" ? previous : null;
+  }
+  if (kind === "final") {
+    const previousItems = items.filter((item) => closingTime(item) <= time);
+    const latestInitial = lastItem(previousItems.filter((item) => closingKind(item) === "initial" || closingKind(item) === "both"));
+    if (!latestInitial) {
+      const previous = lastItem(previousItems);
+      return previous && closingKind(previous) === "final" ? previous : null;
+    }
+    const nextInitial = items.find((item) => closingTime(item) > closingTime(latestInitial) && closingKind(item) === "initial");
+    const final = items
+      .filter((item) => {
+        const itemTime = closingTime(item);
+        return (closingKind(item) === "final" || closingKind(item) === "both")
+          && itemTime > closingTime(latestInitial)
+          && (!nextInitial || itemTime < closingTime(nextInitial));
+      })
+      .slice(-1)[0];
+    return final || null;
+  }
+  return null;
+}
+
 function latestClosingValue(items, kind) {
   const row = items
     .filter((item) => closingKind(item) === kind || closingKind(item) === "both")
@@ -2316,18 +2351,25 @@ async function onClosing(event) {
     toast("A foto do encerrante é obrigatória.");
     return;
   }
+  const duplicate = closingDuplicateCandidate(data.pump, data.kind, createdAt);
+  if (duplicate) {
+    const kindLabel = data.kind === "final" ? "final" : "inicial";
+    const confirmed = window.confirm(`Já existe encerrante ${kindLabel} para a Bomba ${data.pump} neste ciclo:\n\nValor atual: ${formatNumber(closingValue(duplicate))}\nData/hora: ${formatDate(duplicate.createdAt)}\n\nDeseja substituir pelo novo valor ${formatNumber(value)}?`);
+    if (!confirmed) return;
+  }
   try {
     const payload = await apiRequest("/closings", {
       method: "POST",
-      body: JSON.stringify({ ...(isAdmin ? { createdAt } : {}), pump: data.pump, kind: data.kind, value, photo }),
+      body: JSON.stringify({ ...(isAdmin ? { createdAt } : {}), pump: data.pump, kind: data.kind, value, photo, ...(duplicate ? { replaceId: duplicate.id } : {}) }),
     });
-    state.pumpClosings.unshift(payload.closing);
+    if (payload.replaced) state.pumpClosings = state.pumpClosings.map((item) => item.id === payload.closing.id ? payload.closing : item);
+    else state.pumpClosings.unshift(payload.closing);
     const cycle = latestClosingCycle(data.pump);
     const message = cycle.status === "pending"
-      ? `${data.kind === "final" ? "Encerrante final" : "Encerrante inicial"} salvo. Aguardando o outro lançamento para conciliar.`
+      ? `${data.kind === "final" ? "Encerrante final" : "Encerrante inicial"} ${payload.replaced ? "substituído" : "salvo"}. Aguardando o outro lançamento para conciliar.`
       : cycle.status === "divergent"
-      ? `Alerta de divergência na bomba ${data.pump}: diferença de ${formatNumber(cycle.diff)} litros.`
-      : `${data.kind === "final" ? "Encerrante final" : "Encerrante inicial"} salvo. ${cycle.rolledOver ? "Encerrante virou em 100.000,00. " : ""}Diferença da bomba ${data.pump}: ${formatNumber(cycle.diff)} litros.`;
+      ? `${payload.replaced ? "Encerrante substituído." : "Alerta"} Divergência na bomba ${data.pump}: diferença de ${formatNumber(cycle.diff)} litros.`
+      : `${data.kind === "final" ? "Encerrante final" : "Encerrante inicial"} ${payload.replaced ? "substituído" : "salvo"}. ${cycle.rolledOver ? "Encerrante virou em 100.000,00. " : ""}Diferença da bomba ${data.pump}: ${formatNumber(cycle.diff)} litros.`;
     toast(message);
     render();
   } catch (error) {
