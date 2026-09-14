@@ -1168,6 +1168,21 @@ function simulateDieselReceipt(data) {
   return { status: withinLiters || withinPercent ? "Dentro da tolerância" : "Com divergência", initial, final, measuredLiters, diffLiters, diffPercent, tolerance, message };
 }
 
+function dieselReceiptConversion(item) {
+  const initialRow = nearestDieselArqueacao(item.tankId, item.initialMm);
+  const finalRow = nearestDieselArqueacao(item.tankId, item.finalMm);
+  const initialLiters = item.initialLiters !== null && item.initialLiters !== undefined ? Number(item.initialLiters) : (initialRow ? Number(initialRow.liters) : null);
+  const finalLiters = item.finalLiters !== null && item.finalLiters !== undefined ? Number(item.finalLiters) : (finalRow ? Number(finalRow.liters) : null);
+  const measuredLiters = item.measuredLiters !== null && item.measuredLiters !== undefined ? Number(item.measuredLiters) : (initialLiters !== null && finalLiters !== null ? finalLiters - initialLiters : null);
+  const diffLiters = item.diffLiters !== null && item.diffLiters !== undefined ? Number(item.diffLiters) : (measuredLiters !== null ? measuredLiters - Number(item.invoiceLiters || 0) : null);
+  const diffPercent = item.diffPercent !== null && item.diffPercent !== undefined ? Number(item.diffPercent) : (diffLiters !== null && Number(item.invoiceLiters) > 0 ? diffLiters / Number(item.invoiceLiters) : null);
+  const notes = [];
+  if ((item.initialLiters === null || item.initialLiters === undefined) && initialRow) notes.push(`Inicial convertido pela tabela atual: ${initialRow.measureMm} mm.`);
+  if ((item.finalLiters === null || item.finalLiters === undefined) && finalRow) notes.push(`Final convertido pela tabela atual: ${finalRow.measureMm} mm.`);
+  if (!initialRow || !finalRow) notes.push("Tabela de arqueação não encontrada para uma das medições.");
+  return { initialRow, finalRow, initialLiters, finalLiters, measuredLiters, diffLiters, diffPercent, notes };
+}
+
 function renderDieselSimulationPreview(result) {
   const klass = result.status === "Com divergência" ? "bad" : result.status === "Dentro da tolerância" ? "ok" : "info";
   if (result.measuredLiters === undefined) {
@@ -1333,6 +1348,7 @@ function renderDieselReceiptDetail() {
   if (!item) return "";
   const tank = dieselReceivingData.tanks.find((candidate) => candidate.id === item.tankId);
   const tolerance = dieselReceivingData.tolerances.find((candidate) => candidate.tankId === item.tankId && candidate.active);
+  const conversion = dieselReceiptConversion(item);
   return `
     <div class="modal-backdrop" role="dialog" aria-modal="true">
       <section class="modal">
@@ -1344,13 +1360,14 @@ function renderDieselReceiptDetail() {
           <div><span>Placa</span><strong>${item.trailerPlate}</strong></div>
           <div><span>Nota fiscal</span><strong>${item.invoiceNumber}</strong></div>
           <div><span>NF litros</span><strong>${formatNumber(item.invoiceLiters)}</strong></div>
-          <div><span>Inicial</span><strong>${item.initialMm} mm / ${item.initialLiters === null ? "-" : formatNumber(item.initialLiters)} L</strong></div>
-          <div><span>Final</span><strong>${item.finalMm} mm / ${item.finalLiters === null ? "-" : formatNumber(item.finalLiters)} L</strong></div>
-          <div><span>Apurado</span><strong>${item.measuredLiters === null ? "-" : formatNumber(item.measuredLiters)} L</strong></div>
-          <div><span>Diferença</span><strong>${item.diffLiters === null ? "-" : formatNumber(item.diffLiters)} L</strong></div>
-          <div><span>Diferença %</span><strong>${item.diffPercent === null ? "-" : `${formatNumber(item.diffPercent * 100)}%`}</strong></div>
+          <div><span>Inicial</span><strong>${item.initialMm} mm / ${conversion.initialLiters === null ? "-" : formatNumber(conversion.initialLiters)} L</strong></div>
+          <div><span>Final</span><strong>${item.finalMm} mm / ${conversion.finalLiters === null ? "-" : formatNumber(conversion.finalLiters)} L</strong></div>
+          <div><span>Apurado</span><strong>${conversion.measuredLiters === null ? "-" : formatNumber(conversion.measuredLiters)} L</strong></div>
+          <div><span>Diferença</span><strong>${conversion.diffLiters === null ? "-" : formatNumber(conversion.diffLiters)} L</strong></div>
+          <div><span>Diferença %</span><strong>${conversion.diffPercent === null ? "-" : `${formatNumber(conversion.diffPercent * 100)}%`}</strong></div>
           <div><span>Status</span><strong><span class="badge ${item.status === "Com divergência" ? "bad" : item.status === "Dentro da tolerância" ? "ok" : "info"}">${item.status}</span></strong></div>
           <div><span>Tolerância usada</span><strong>${tolerance ? `${formatNumber(tolerance.toleranceLiters)} L / ${formatNumber(tolerance.tolerancePercent)}%` : "-"}</strong></div>
+          <div class="full"><span>Litros convertidos</span><strong>Final ${conversion.finalLiters === null ? "-" : formatNumber(conversion.finalLiters)} L - Inicial ${conversion.initialLiters === null ? "-" : formatNumber(conversion.initialLiters)} L = ${conversion.measuredLiters === null ? "-" : formatNumber(conversion.measuredLiters)} L</strong>${conversion.notes.length ? `<small class="table-note">${conversion.notes.join(" ")}</small>` : ""}</div>
           <div class="full"><span>Observação frentista</span><strong>${item.observation || "-"}</strong></div>
           <div class="full"><span>Análise administrador</span><strong>${item.adminAnalysis || "-"}</strong></div>
         </div>
