@@ -32,7 +32,10 @@ create table if not exists public.fuelings (
   km numeric(12, 0) not null,
   liters numeric(12, 2) not null,
   observation text,
-  user_id uuid not null references public.app_users(id)
+  user_id uuid not null references public.app_users(id),
+  source text not null default 'online' check (source in ('online', 'offline')),
+  offline_created_at timestamptz,
+  synced_at timestamptz
 );
 
 create table if not exists public.pump_closings (

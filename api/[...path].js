@@ -83,6 +83,8 @@ function mapVehicle(row) {
 }
 
 function mapFueling(row) {
+  const observation = row.observation || "";
+  const offlineFallback = /\[OFFLINE/i.test(observation);
   return {
     id: row.id,
     createdAt: row.created_at,
@@ -93,8 +95,11 @@ function mapFueling(row) {
     pumpPhoto: row.pump_photo_url || "",
     km: Number(row.km),
     liters: Number(row.liters),
-    observation: row.observation || "",
+    observation,
     userId: row.user_id,
+    source: row.source || (row.offline_created_at || offlineFallback ? "offline" : "online"),
+    offlineCreatedAt: row.offline_created_at || null,
+    syncedAt: row.synced_at || null,
   };
 }
 
@@ -572,25 +577,52 @@ async function handle(req, res) {
     if (duplicates.length) {
       return send(res, 409, { error: "Este abastecimento ja foi lancado ha poucos instantes. Confira o historico antes de tentar novamente." });
     }
+    const source = body.source === "offline" || body.offlineCreatedAt ? "offline" : "online";
+    const offlineCreatedAt = body.offlineCreatedAt ? new Date(body.offlineCreatedAt) : null;
+    if (offlineCreatedAt && Number.isNaN(offlineCreatedAt.getTime())) return send(res, 400, { error: "Data do lancamento offline invalida." });
+    const createdAt = source === "offline" && offlineCreatedAt ? offlineCreatedAt : new Date();
+    const syncedAt = source === "offline" ? new Date() : null;
     const [vehiclePhoto, tachographPhoto, pumpPhoto] = await Promise.all([
       uploadPhoto(body.vehiclePhoto, "fuelings/vehicles"),
       uploadPhoto(body.tachographPhoto, "fuelings/tachographs"),
       uploadPhoto(body.pumpPhoto, "fuelings/pumps"),
     ]);
-    const rows = await supabase("fuelings", {
-      method: "POST",
-      body: JSON.stringify({
-        vehicle_id: body.vehicleId,
-        vehicle_photo_url: vehiclePhoto,
-        tachograph_photo_url: tachographPhoto,
-        pump: body.pump,
-        pump_photo_url: pumpPhoto,
-        km: body.km,
-        liters: body.liters,
-        observation: body.observation || "",
-        user_id: user.id,
-      }),
-    });
+    const insertPayload = {
+      created_at: createdAt.toISOString(),
+      vehicle_id: body.vehicleId,
+      vehicle_photo_url: vehiclePhoto,
+      tachograph_photo_url: tachographPhoto,
+      pump: body.pump,
+      pump_photo_url: pumpPhoto,
+      km: body.km,
+      liters: body.liters,
+      observation: body.observation || "",
+      user_id: user.id,
+      source,
+      offline_created_at: offlineCreatedAt ? offlineCreatedAt.toISOString() : null,
+      synced_at: syncedAt ? syncedAt.toISOString() : null,
+    };
+    let rows;
+    try {
+      rows = await supabase("fuelings", {
+        method: "POST",
+        body: JSON.stringify(insertPayload),
+      });
+    } catch (error) {
+      const message = `${error.message || ""} ${JSON.stringify(error.details || {})}`;
+      if (!/source|offline_created_at|synced_at|schema cache/i.test(message)) throw error;
+      delete insertPayload.source;
+      delete insertPayload.offline_created_at;
+      delete insertPayload.synced_at;
+      if (source === "offline") {
+        const note = `[OFFLINE sincronizado em ${syncedAt.toISOString()}]`;
+        insertPayload.observation = `${body.observation || ""}${body.observation ? " " : ""}${note}`;
+      }
+      rows = await supabase("fuelings", {
+        method: "POST",
+        body: JSON.stringify(insertPayload),
+      });
+    }
     return send(res, 201, { fueling: mapFueling(rows[0]) });
   }
 

@@ -194,7 +194,11 @@ async function syncOfflineFuelings() {
       try {
         const payload = await apiRequest("/fuelings", {
           method: "POST",
-          body: JSON.stringify(item.payload),
+          body: JSON.stringify({
+            ...item.payload,
+            source: "offline",
+            offlineCreatedAt: item.createdAt,
+          }),
         });
         state.fuelings.unshift(payload.fueling);
         await deleteOfflineFueling(item.localId);
@@ -353,6 +357,7 @@ function fuelingSortValue(item, key) {
   const user = userById(item.userId);
   const values = {
     date: new Date(item.createdAt).getTime(),
+    origin: fuelingOriginLabel(item),
     vehicle: vehicle?.code || "",
     km: Number(item.km || 0),
     distance: data ? Number(data.distance || 0) : -Infinity,
@@ -361,7 +366,7 @@ function fuelingSortValue(item, key) {
     status: consumptionStatus(item).label,
     pump: Number(item.pump || 0),
     user: user?.name || "",
-    observation: item.observation || "",
+    observation: fuelingObservation(item),
     photos: [item.vehiclePhoto, item.tachographPhoto, item.pumpPhoto].filter(Boolean).length,
   };
   return values[key] ?? "";
@@ -395,6 +400,20 @@ function consumptionStatus(item) {
   if (data.average > highLimit * 1.25) return { key: "very-high", label: "Muito alta", className: "bad" };
   if (data.average > highLimit) return { key: "high", label: "Alta", className: "warn" };
   return { key: "ok", label: "Dentro da faixa", className: "ok" };
+}
+
+function fuelingOriginLabel(item) {
+  return item.source === "offline" || item.offlineCreatedAt ? "Offline" : "Online";
+}
+
+function fuelingOriginBadge(item) {
+  const offline = item.source === "offline" || item.offlineCreatedAt;
+  const synced = item.syncedAt ? `<small class="table-note">Sincronizado em ${formatDate(item.syncedAt)}</small>` : "";
+  return `<span class="badge ${offline ? "warn" : "ok"}">${offline ? "Offline" : "Online"}</span>${offline ? synced : ""}`;
+}
+
+function fuelingObservation(item) {
+  return String(item.observation || "").replace(/\s*\[OFFLINE[^\]]*\]\s*/gi, " ").trim();
 }
 
 function closingKind(item) {
@@ -854,6 +873,7 @@ function renderFuelings() {
       <table>
         <thead><tr>
           ${sortableHeader("Data", "date")}
+          ${sortableHeader("Origem", "origin")}
           ${sortableHeader("Veículo", "vehicle")}
           ${sortableHeader("Km", "km")}
           ${sortableHeader("Km percorrido", "distance")}
@@ -873,6 +893,7 @@ function renderFuelings() {
             const isAdmin = currentUser()?.role === "admin";
             return `<tr>
               <td>${formatDate(item.createdAt)}</td>
+              <td>${fuelingOriginBadge(item)}</td>
               <td>${vehicleById(item.vehicleId)?.code || "-"}</td>
               <td>${moneyless(item.km)}</td>
               <td>${data ? moneyless(data.distance) : "-"}</td>
@@ -881,11 +902,11 @@ function renderFuelings() {
               <td><span class="badge ${status.className}">${status.label}</span></td>
               <td>${item.pump}</td>
               <td>${userById(item.userId)?.name || "-"}</td>
-              <td>${item.observation || "-"}</td>
+              <td>${fuelingObservation(item) || "-"}</td>
               <td>${[item.vehiclePhoto, item.tachographPhoto, item.pumpPhoto].filter(Boolean).length} anexos</td>
               <td><div class="row-actions"><button class="icon-btn" data-action="detail-fueling" data-id="${item.id}" title="Detalhes">${icon("dashboard")}</button>${isAdmin ? `<button class="icon-btn" data-action="edit-fueling" data-id="${item.id}" title="Editar">${icon("edit")}</button><button class="icon-btn danger" data-action="request-delete-fueling" data-id="${item.id}" title="Excluir">${icon("trash")}</button>` : ""}</div></td>
             </tr>`;
-          }).join("") || `<tr><td colspan="12">Nenhum abastecimento encontrado.</td></tr>`}
+          }).join("") || `<tr><td colspan="13">Nenhum abastecimento encontrado.</td></tr>`}
         </tbody>
       </table>
     </section>
@@ -912,13 +933,16 @@ function renderFuelingDetails() {
         <div class="detail-grid">
           <div><span>Veículo</span><strong>${vehicle ? `${vehicle.code} - ${vehicle.plate}` : "-"}</strong></div>
           <div><span>Frentista</span><strong>${userById(item.userId)?.name || "-"}</strong></div>
+          <div><span>Origem</span><strong>${fuelingOriginBadge(item)}</strong></div>
+          ${item.offlineCreatedAt ? `<div><span>Lançado offline</span><strong>${formatDate(item.offlineCreatedAt)}</strong></div>` : ""}
+          ${item.syncedAt ? `<div><span>Sincronizado</span><strong>${formatDate(item.syncedAt)}</strong></div>` : ""}
           <div><span>Km atual</span><strong>${moneyless(item.km)}</strong></div>
           <div><span>Litros</span><strong>${formatNumber(item.liters)}</strong></div>
           <div><span>Média calculada</span><strong>${data ? `${formatNumber(data.average)} km/l` : "-"}</strong></div>
           <div><span>Status</span><strong><span class="badge ${status.className}">${status.label}</span></strong></div>
           <div><span>Km anterior</span><strong>${data ? moneyless(data.previousKm) : "-"}</strong></div>
           <div><span>Distância</span><strong>${data ? moneyless(data.distance) : "-"}</strong></div>
-          <div class="full"><span>Observação</span><strong>${item.observation || "-"}</strong></div>
+          <div class="full"><span>Observação</span><strong>${fuelingObservation(item) || "-"}</strong></div>
         </div>
         <div class="photo-grid">
           ${photoLink(item.vehiclePhoto, "Foto do carro")}
@@ -971,7 +995,7 @@ function renderEditFuelingModal() {
           <div class="field"><label>Km atual</label><input name="km" type="number" min="0" step="1" value="${item.km}" required></div>
           <div class="field"><label>Bomba</label><select name="pump" required>${pumpOptions(item.pump)}</select></div>
           <div class="field"><label>Litros</label><input name="liters" type="number" min="0.01" step="0.01" value="${item.liters}" required></div>
-          <div class="field"><label>Observação</label><textarea name="observation">${item.observation || ""}</textarea></div>
+          <div class="field"><label>Observação</label><textarea name="observation">${fuelingObservation(item)}</textarea></div>
           <div class="field"><label>Justificativa da alteração</label><textarea name="justification" required placeholder="Explique o motivo da correção"></textarea></div>
           <div class="field"><label>Senha do administrador</label><input name="password" type="password" autocomplete="current-password" required></div>
         </div>
@@ -1885,6 +1909,7 @@ async function onFueling(event) {
     const tachographPhoto = await fileToDataUrl(form.tachographPhoto.files[0]);
     const pumpPhoto = await fileToDataUrl(form.pumpPhoto.files[0]);
     requestPayload = {
+      source: "online",
       vehicleId: data.vehicleId,
       vehiclePhoto,
       tachographPhoto,
@@ -1913,6 +1938,7 @@ async function onFueling(event) {
           const tachographPhoto = await fileToDataUrl(form.tachographPhoto.files[0]);
           const pumpPhoto = await fileToDataUrl(form.pumpPhoto.files[0]);
           requestPayload = {
+            source: "online",
             vehicleId: data.vehicleId,
             vehiclePhoto,
             tachographPhoto,
@@ -2455,12 +2481,14 @@ function exportDieselReceipts() {
 }
 
 function exportFuelings() {
-  const header = ["DataHora", "Veiculo", "KmAtual", "KmPercorrido", "Bomba", "Litros", "MediaKmL", "Status", "Frentista", "Observacao"];
+  const header = ["DataHora", "Origem", "SincronizadoEm", "Veiculo", "KmAtual", "KmPercorrido", "Bomba", "Litros", "MediaKmL", "Status", "Frentista", "Observacao"];
   const rows = filteredFuelings().map((item) => {
     const data = consumption(item);
     const status = consumptionStatus(item);
     return [
       formatDate(item.createdAt),
+      fuelingOriginLabel(item),
+      item.syncedAt ? formatDate(item.syncedAt) : "",
       vehicleById(item.vehicleId)?.code || "",
       item.km,
       data ? data.distance : "",
@@ -2469,7 +2497,7 @@ function exportFuelings() {
       data ? String(data.average.toFixed(2)).replace(".", ",") : "",
       status.label,
       userById(item.userId)?.name || "",
-      item.observation || "",
+      fuelingObservation(item),
     ];
   });
   const csv = [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(";")).join("\n");
@@ -2516,7 +2544,7 @@ function exportFuelingsTxtErp() {
     const parts = erpDateParts(item.createdAt);
     const vehicle = vehicleById(item.vehicleId);
     const data = consumption(item);
-    return `${parts.date} ${parts.time} ${fixedText("100", 16)}${fixedText(vehicle?.code || "", 16)}${erpInteger(item.km, 7)} ${erpDecimalCents(item.liters)} ${erpInteger(data ? data.distance : 0, 10)} ${fixedText((item.observation || "").replace(/\s+/g, " ").trim(), 10)} 00 7`;
+    return `${parts.date} ${parts.time} ${fixedText("100", 16)}${fixedText(vehicle?.code || "", 16)}${erpInteger(item.km, 7)} ${erpDecimalCents(item.liters)} ${erpInteger(data ? data.distance : 0, 10)} ${fixedText(fuelingObservation(item).replace(/\s+/g, " ").trim(), 10)} 00 7`;
   });
   const txt = [header, ...rows].join("\r\n");
   const blob = new Blob([txt], { type: "text/plain;charset=utf-8" });
