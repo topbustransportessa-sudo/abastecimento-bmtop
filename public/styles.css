@@ -302,6 +302,41 @@ button {
   grid-template-columns: 1fr;
 }
 
+.closing-form {
+  max-width: 900px;
+}
+
+.measurement-preview {
+  min-height: 58px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #3b82f6;
+  border-radius: var(--radius);
+  background: #f8fafc;
+  color: var(--muted);
+}
+
+.measurement-preview strong {
+  color: var(--ink);
+  font-size: 1.05rem;
+}
+
+.measurement-preview.ok {
+  border-left-color: var(--ok);
+}
+
+.measurement-preview.bad {
+  border-left-color: var(--bad);
+  color: var(--bad);
+}
+
+.audit-table table {
+  min-width: 1640px;
+}
+
 .field {
   display: grid;
   gap: 7px;

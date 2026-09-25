@@ -35,6 +35,7 @@ let deleteTargetId = "";
 let editFuelingId = "";
 let editClosingId = "";
 let closingPhotoPreview = null;
+let tankMeasurementPhotoPreview = null;
 let editUserId = "";
 let showChangePassword = false;
 let fuelingSubmitting = false;
@@ -45,6 +46,7 @@ let dieselReceivingLoading = false;
 let dieselReceivingView = "launch";
 let dieselReceivingDetailId = "";
 let dieselReceivingFilters = { company: "", from: "", to: "", attendant: "", supplier: "", trailerPlate: "", tank: "", status: "", divergence: "" };
+let tankMeasurementFilters = { from: "", to: "", company: "", tank: "", pump: "" };
 
 function seedState() {
   return {
@@ -53,6 +55,7 @@ function seedState() {
     pumpClosings: [],
     fuelings: [],
     fuelingAudits: [],
+    tankMeasurements: [],
   };
 }
 
@@ -84,6 +87,7 @@ function applyRemoteData(data) {
   state.fuelings = data.fuelings || [];
   state.pumpClosings = data.pumpClosings || [];
   state.fuelingAudits = data.fuelingAudits || [];
+  state.tankMeasurements = data.tankMeasurements || [];
 }
 
 async function apiRequest(path, options = {}) {
@@ -635,6 +639,124 @@ function renderClosingPhotoModal() {
   `;
 }
 
+function tankMeasurementTime(item) {
+  const time = new Date(item?.measuredAt || item?.createdAt).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function tankMeasurementDuplicateCandidate(tankId, pump, kind, measuredAt) {
+  const time = new Date(measuredAt).getTime();
+  const items = (state.tankMeasurements || [])
+    .filter((item) => item.tankId === tankId && item.pump === pump)
+    .sort((a, b) => tankMeasurementTime(a) - tankMeasurementTime(b));
+  if (!Number.isFinite(time)) return null;
+  const previous = lastItem(items.filter((item) => tankMeasurementTime(item) <= time));
+  if (kind === "initial") return previous?.kind === "initial" ? previous : null;
+  const latestInitial = lastItem(items.filter((item) => item.kind === "initial" && tankMeasurementTime(item) <= time));
+  if (!latestInitial) return previous?.kind === "final" ? previous : null;
+  const nextInitial = items.find((item) => item.kind === "initial" && tankMeasurementTime(item) > tankMeasurementTime(latestInitial));
+  return lastItem(items.filter((item) => item.kind === "final"
+    && tankMeasurementTime(item) > tankMeasurementTime(latestInitial)
+    && (!nextInitial || tankMeasurementTime(item) < tankMeasurementTime(nextInitial)))) || null;
+}
+
+function tankMeasurementCycles() {
+  const cycles = [];
+  const groups = new Map();
+  (state.tankMeasurements || []).forEach((item) => {
+    const key = `${item.tankId}|${item.pump}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  });
+  groups.forEach((group) => {
+    const items = group.sort((a, b) => tankMeasurementTime(a) - tankMeasurementTime(b));
+    let initial = null;
+    items.forEach((item) => {
+      if (item.kind === "initial") {
+        if (initial) cycles.push({ tankId: initial.tankId, pump: initial.pump, initial, final: null, usedLiters: null, status: "pending", start: tankMeasurementTime(initial), end: null });
+        initial = item;
+      } else if (initial) {
+        cycles.push({
+          tankId: item.tankId,
+          pump: item.pump,
+          initial,
+          final: item,
+          usedLiters: Math.abs(Number(item.liters) - Number(initial.liters)),
+          status: "complete",
+          start: tankMeasurementTime(initial),
+          end: tankMeasurementTime(item),
+        });
+        initial = null;
+      } else {
+        cycles.push({ tankId: item.tankId, pump: item.pump, initial: null, final: item, usedLiters: null, status: "pending", start: null, end: tankMeasurementTime(item) });
+      }
+    });
+    if (initial) cycles.push({ tankId: initial.tankId, pump: initial.pump, initial, final: null, usedLiters: null, status: "pending", start: tankMeasurementTime(initial), end: null });
+  });
+  return cycles.sort((a, b) => (b.end || b.start || 0) - (a.end || a.start || 0));
+}
+
+function tankCycleForClosing(closingCycle) {
+  if (!closingCycle?.initial) return null;
+  const candidates = tankMeasurementCycles().filter((cycle) => cycle.pump === closingCycle.pump && cycle.initial);
+  const closingStart = closingCycle.start || closingTime(closingCycle.initial);
+  const closingEnd = closingCycle.final ? closingCycle.end : null;
+  return candidates
+    .map((cycle) => {
+      const startGap = Math.abs(cycle.start - closingStart);
+      const endGap = closingEnd && cycle.end ? Math.abs(cycle.end - closingEnd) : 0;
+      return { cycle, score: startGap + endGap, startGap, endGap };
+    })
+    .filter((item) => item.startGap <= 8 * 60 * 60 * 1000 && (!closingEnd || !item.cycle.end || item.endGap <= 8 * 60 * 60 * 1000))
+    .sort((a, b) => a.score - b.score)[0]?.cycle || null;
+}
+
+function auditCycleMetrics(closingCycle) {
+  const tankCycle = tankCycleForClosing(closingCycle);
+  const tankLiters = tankCycle?.usedLiters ?? null;
+  const fuelDiff = closingCycle.final ? closingCycle.measured - closingCycle.launched : null;
+  const tankDiff = closingCycle.final && tankLiters !== null ? closingCycle.measured - tankLiters : null;
+  const fuelOk = fuelDiff !== null && Math.abs(fuelDiff) <= 1;
+  const tankOk = tankDiff !== null && Math.abs(tankDiff) <= 30;
+  const complete = Boolean(closingCycle.final && tankCycle?.final);
+  const status = complete ? (fuelOk && tankOk ? "ok" : "divergent") : "pending";
+  return { tankCycle, tankLiters, fuelDiff, tankDiff, fuelOk, tankOk, status };
+}
+
+function filteredAuditCycles() {
+  const fromTime = closingFilters.from ? new Date(closingFilters.from).getTime() : null;
+  const toTime = closingFilters.to ? new Date(closingFilters.to).getTime() : null;
+  return closingCycles().filter((item) => {
+    const start = item.start || item.end || closingTime(item.initial) || closingTime(item.final);
+    const end = item.end || item.start || start;
+    return (!fromTime || end >= fromTime)
+      && (!toTime || start <= toTime)
+      && (!closingFilters.pump || item.pump === closingFilters.pump)
+      && (!closingFilters.status || auditCycleMetrics(item).status === closingFilters.status);
+  });
+}
+
+function tankMeasurementPhotoButton(item, suffix = "") {
+  if (!item) return "-";
+  const label = `${formatNumber(item.measureMm)} mm / ${formatNumber(item.liters)} L${suffix}`;
+  if (!item.photo) return label;
+  return `<button class="table-link" data-action="view-tank-measurement-photo" data-id="${item.id}" type="button">${label}</button>`;
+}
+
+function renderTankMeasurementPhotoModal() {
+  if (!tankMeasurementPhotoPreview) return "";
+  const item = (state.tankMeasurements || []).find((measurement) => measurement.id === tankMeasurementPhotoPreview);
+  if (!item?.photo) return "";
+  const tank = dieselReceivingData.tanks.find((candidate) => candidate.id === item.tankId);
+  return `
+    <div class="modal-backdrop" role="dialog" aria-modal="true">
+      <section class="modal photo-modal">
+        <div class="panel-header"><div><h2>Foto da medição tanque ${item.kind === "final" ? "final" : "inicial"}</h2><p>${tank?.name || "Tanque"} - Bomba ${item.pump} - ${formatDate(item.measuredAt)}</p></div><button class="icon-btn" data-action="close-tank-measurement-photo" title="Fechar">${icon("close")}</button></div>
+        <img class="modal-photo" src="${item.photo}" alt="Foto da régua do tanque">
+      </section>
+    </div>`;
+}
+
 function render() {
   const user = currentUser();
   if (!user) {
@@ -672,6 +794,7 @@ function render() {
       ${renderEditFuelingModal()}
       ${renderEditClosingModal()}
       ${renderClosingPhotoModal()}
+      ${renderTankMeasurementPhotoModal()}
       ${renderDeleteFuelingModal()}
       ${renderEditUserModal()}
       ${renderChangePasswordModal()}
@@ -720,6 +843,8 @@ function renderSidebar(user) {
     ["fuelings", "Abastecimentos", "gauge"],
     ["diesel-receiving", "Recebimento de Diesel", "fuel"],
     ["closings", "Encerrantes", "export"],
+    ["tank-measurements", "Medição Tanque", "gauge"],
+    ["audit", "Auditoria", "dashboard"],
     ["vehicles", "Veículos", "bus"],
   ];
   if (user.role === "admin") {
@@ -753,6 +878,8 @@ function pageMeta() {
     fuelings: ["Abastecimentos", "Histórico com médias, alertas e exportação."],
     "diesel-receiving": ["Recebimento de Diesel", "Recebimento por carreta, régua e divergências."],
     closings: ["Encerrantes", "Controle inicial e final das bombas."],
+    "tank-measurements": ["Medição Tanque", "Medição inicial e final convertida pela arqueação."],
+    audit: ["Auditoria", "Conciliação entre encerrante, tanque e abastecimentos."],
     vehicles: ["Veículos", "Cadastro das faixas de consumo km/l."],
     users: ["Usuários", "Acesso e perfis administrados."],
   };
@@ -764,6 +891,8 @@ function renderRoute() {
   if (route === "fuelings") return renderFuelings();
   if (route === "diesel-receiving") return renderDieselReceiving();
   if (route === "closings") return renderClosings();
+  if (route === "tank-measurements") return renderTankMeasurements();
+  if (route === "audit") return renderAudit();
   if (route === "vehicles") return renderVehicles();
   if (route === "users") return currentUser().role === "admin" ? renderUsers() : renderDashboard();
   return renderDashboard();
@@ -1270,6 +1399,91 @@ function renderDieselReceiving() {
   `;
 }
 
+function tankMeasurementConversion(tankId, measureMm) {
+  const value = parseLocaleNumber(measureMm);
+  if (!tankId || !Number.isFinite(value)) return null;
+  return (dieselReceivingData.arqueacao || []).find((row) => row.tankId === tankId && row.active && Math.abs(Number(row.measureMm) - value) < 0.001) || null;
+}
+
+function filteredTankMeasurements() {
+  const from = tankMeasurementFilters.from ? new Date(tankMeasurementFilters.from).getTime() : null;
+  const to = tankMeasurementFilters.to ? new Date(tankMeasurementFilters.to).getTime() : null;
+  return (state.tankMeasurements || []).filter((item) => {
+    const time = tankMeasurementTime(item);
+    return (!from || time >= from) && (!to || time <= to)
+      && (!tankMeasurementFilters.company || item.company === tankMeasurementFilters.company)
+      && (!tankMeasurementFilters.tank || item.tankId === tankMeasurementFilters.tank)
+      && (!tankMeasurementFilters.pump || item.pump === tankMeasurementFilters.pump);
+  }).sort((a, b) => tankMeasurementTime(b) - tankMeasurementTime(a));
+}
+
+function renderTankMeasurementPreview() {
+  return `<div class="measurement-preview info" data-tank-measurement-preview>Informe a medida em mm para visualizar a conversão em litros.</div>`;
+}
+
+function renderTankMeasurements() {
+  if (!dieselReceivingData.loaded && !dieselReceivingLoading) ensureDieselReceivingData().then(() => route === "tank-measurements" && render());
+  const admin = currentUser()?.role === "admin";
+  const companies = dieselReceivingData.companies || [];
+  const selectedCompany = companies.length === 1 ? companies[0] : "";
+  const rows = filteredTankMeasurements();
+  return `
+    <section class="grid two measurement-layout">
+      <form class="panel" data-form="tank-measurement">
+        <div class="panel-header"><div><h2>Nova medição do tanque</h2><p>${admin ? "Administrador pode informar a data e hora para testes." : "A data e hora serão registradas automaticamente pelo sistema."}</p></div></div>
+        <div class="form-grid">
+          <div class="field"><label>Data e hora</label>${admin ? `<input name="measuredAt" type="datetime-local" value="${localDateTimeInput()}" required>` : `<input value="${formatDate(new Date().toISOString())}" readonly>`}</div>
+          <div class="field"><label>Empresa</label><select name="company" required><option value="">Selecione</option>${companyOptions(selectedCompany)}</select></div>
+          <div class="field"><label>Tanque</label><select name="tankId" required><option value="">Selecione</option>${tankOptions(selectedCompany)}</select></div>
+          <div class="field"><label>Bomba conciliada</label><select name="pump" required>${pumpOptions()}</select></div>
+          <div class="field"><label>Tipo de lançamento</label><select name="kind" required><option value="initial">Medição tanque inicial</option><option value="final">Medição tanque final</option></select></div>
+          <div class="field"><label>Medida da régua em mm</label><input name="measureMm" type="text" inputmode="decimal" placeholder="Ex.: 250" required></div>
+          <div class="field full">${renderTankMeasurementPreview()}</div>
+          <div class="field full"><label>Foto da régua do tanque</label><input name="photo" type="file" accept="image/*" capture="environment" required></div>
+          <div class="mobile-photo-preview hidden full" data-photo-preview-for="photo"></div>
+        </div>
+        <div class="actions" style="margin-top:14px"><button class="button" type="submit">${icon("save")} Salvar medição</button></div>
+      </form>
+      <section class="panel">
+        <div class="panel-header"><div><h2>Ciclos recentes</h2><p>Consumo calculado pela diferença entre as medições inicial e final.</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Tanque</th><th>Bomba</th><th>Inicial</th><th>Final</th><th>Litros usados</th><th>Status</th></tr></thead><tbody>
+          ${tankMeasurementCycles().slice(0, 8).map((cycle) => {
+            const tank = dieselReceivingData.tanks.find((item) => item.id === cycle.tankId);
+            return `<tr><td>${tank?.name || "-"}</td><td>${cycle.pump}</td><td>${cycle.initial ? tankMeasurementPhotoButton(cycle.initial) : "-"}</td><td>${cycle.final ? tankMeasurementPhotoButton(cycle.final) : "-"}</td><td>${cycle.usedLiters === null ? "-" : formatNumber(cycle.usedLiters)}</td><td><span class="badge ${cycle.status === "complete" ? "ok" : "info"}">${cycle.status === "complete" ? "Completo" : "Pendente"}</span></td></tr>`;
+          }).join("") || `<tr><td colspan="6">Nenhum ciclo lançado.</td></tr>`}
+        </tbody></table></div>
+      </section>
+    </section>
+    <section class="panel"><div class="panel-header"><div><h2>Lançamentos individuais</h2><p>Medidas em milímetros e litros convertidos pela tabela de arqueação.</p></div></div>
+      <div class="filters" data-tank-measurement-filter>
+        <div class="field"><label>De</label><input type="datetime-local" name="from" value="${tankMeasurementFilters.from}"></div>
+        <div class="field"><label>Até</label><input type="datetime-local" name="to" value="${tankMeasurementFilters.to}"></div>
+        <div class="field"><label>Empresa</label><select name="company"><option value="">Todas</option>${companyOptions(tankMeasurementFilters.company)}</select></div>
+        <div class="field"><label>Tanque</label><select name="tank"><option value="">Todos</option>${tankOptions("", tankMeasurementFilters.tank)}</select></div>
+        <div class="field"><label>Bomba</label><select name="pump"><option value="">Todas</option>${pumpOptions(tankMeasurementFilters.pump)}</select></div>
+      </div>
+    </section>
+    <section class="table-wrap"><table><thead><tr><th>Data e hora</th><th>Empresa</th><th>Tanque</th><th>Bomba</th><th>Tipo</th><th>Medida</th><th>Litros convertidos</th><th>Foto</th><th>Usuário</th></tr></thead><tbody>
+      ${rows.map((item) => { const tank = dieselReceivingData.tanks.find((candidate) => candidate.id === item.tankId); return `<tr><td>${formatDate(item.measuredAt)}</td><td>${item.company}</td><td>${tank?.name || "-"}</td><td>${item.pump}</td><td>${item.kind === "final" ? "Final" : "Inicial"}</td><td>${formatNumber(item.measureMm)} mm</td><td>${formatNumber(item.liters)} L</td><td>${item.photo ? `<button class="table-link" type="button" data-action="view-tank-measurement-photo" data-id="${item.id}">Ver foto</button>` : "-"}</td><td>${userById(item.userId)?.name || "-"}</td></tr>`; }).join("") || `<tr><td colspan="9">Nenhuma medição lançada.</td></tr>`}
+    </tbody></table></section>`;
+}
+
+function renderAudit() {
+  if (!dieselReceivingData.loaded && !dieselReceivingLoading) ensureDieselReceivingData().then(() => route === "audit" && render());
+  const rows = filteredAuditCycles();
+  return `
+    <section class="panel"><div class="panel-header"><div><h2>Conciliação por período</h2><p>${rows.length} ciclo(s). Tolerâncias: encerrante x abastecimentos ±1 L; encerrante x medição tanque ±30 L.</p></div></div>${renderClosingFilters()}</section>
+    <section class="table-wrap audit-table"><table><thead><tr><th>Início</th><th>Fim</th><th>Bomba</th><th>Tanque</th><th>Enc. inicial</th><th>Enc. final</th><th>Tanque inicial</th><th>Tanque final</th><th>Litragem encerrante</th><th>Litragem medição tanque</th><th>Soma abastecimentos</th><th>Dispersão abastec.</th><th>Dispersão tanque</th><th>Abastecimentos</th><th>Status</th></tr></thead><tbody>
+      ${rows.map((item) => {
+        const metrics = auditCycleMetrics(item);
+        const tank = dieselReceivingData.tanks.find((candidate) => candidate.id === metrics.tankCycle?.tankId);
+        const statusLabel = metrics.status === "ok" ? "OK" : metrics.status === "divergent" ? "Divergência" : "Pendente";
+        const klass = metrics.status === "ok" ? "ok" : metrics.status === "divergent" ? "bad" : "info";
+        return `<tr><td>${item.initial ? formatDate(item.initial.createdAt) : "-"}</td><td>${item.final ? formatDate(item.final.createdAt) : "-"}</td><td>Bomba ${item.pump}</td><td>${tank ? `${tank.company}<small class="table-note">${tank.name}</small>` : "-"}</td><td>${item.initial ? closingPhotoButton(item.initial, item.initial.initial) : "-"}</td><td>${item.final ? closingPhotoButton(item.final, item.final.final) : "-"}</td><td>${metrics.tankCycle?.initial ? tankMeasurementPhotoButton(metrics.tankCycle.initial) : "-"}</td><td>${metrics.tankCycle?.final ? tankMeasurementPhotoButton(metrics.tankCycle.final) : "-"}</td><td>${formatNumber(item.measured)}${item.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td><td>${metrics.tankLiters === null ? "-" : formatNumber(metrics.tankLiters)}</td><td>${formatNumber(item.launched)}${item.launchedNote ? `<small class="table-note">${item.launchedNote}</small>` : ""}</td><td>${metrics.fuelDiff === null ? "-" : `<span class="badge ${metrics.fuelOk ? "ok" : "bad"}">${formatNumber(metrics.fuelDiff)}</span>`}</td><td>${metrics.tankDiff === null ? "-" : `<span class="badge ${metrics.tankOk ? "ok" : "bad"}">${formatNumber(metrics.tankDiff)}</span>`}</td><td>${item.fuels.length}</td><td><span class="badge ${klass}">${statusLabel}</span></td></tr>`;
+      }).join("") || `<tr><td colspan="15">Nenhuma conciliação encontrada.</td></tr>`}
+    </tbody></table></section>`;
+}
+
 function renderDieselReceivingLaunch() {
   const companies = dieselReceivingData.companies || [];
   const company = companies.length === 1 ? companies[0] : "";
@@ -1418,11 +1632,9 @@ function renderDieselReceiptDetail() {
 
 function renderClosings() {
   const admin = currentUser()?.role === "admin";
-  const divergentCycles = ["1", "2", "3", "4", "5", "6"].map(latestClosingCycle).filter((item) => item.status === "divergent");
   return `
-    ${divergentCycles.length ? `<section class="panel alert-panel"><h2>Alerta de divergência</h2><p>${divergentCycles.map((item) => `Bomba ${item.pump}: diferença de ${formatNumber(item.diff)} litros`).join(" | ")}</p></section>` : ""}
-    <section class="grid two">
-      <form class="panel" data-form="closing">
+    <section>
+      <form class="panel closing-form" data-form="closing">
         <div class="panel-header">
           <div>
             <h2>Novo encerrante</h2>
@@ -1439,17 +1651,7 @@ function renderClosings() {
         </div>
         <div class="actions" style="margin-top:14px"><button class="button" type="submit">${icon("save")} Salvar encerrante</button></div>
       </form>
-      <div class="panel">
-        <div class="panel-header">
-          <div>
-            <h2>Resumo por bomba</h2>
-            <p>Baseado no último ciclo inicial/final de cada bomba. Tolerância: 1 litro.</p>
-          </div>
-        </div>
-        ${renderPumpSummary()}
-      </div>
     </section>
-    ${renderClosingCycleList()}
     <section class="panel">
       <div class="panel-header">
         <div>
@@ -1707,6 +1909,14 @@ function bindEvents() {
     closingPhotoPreview = null;
     render();
   }));
+  document.querySelectorAll("[data-action='view-tank-measurement-photo']").forEach((button) => button.addEventListener("click", () => {
+    tankMeasurementPhotoPreview = button.dataset.id;
+    render();
+  }));
+  document.querySelectorAll("[data-action='close-tank-measurement-photo']").forEach((button) => button.addEventListener("click", () => {
+    tankMeasurementPhotoPreview = null;
+    render();
+  }));
   document.querySelectorAll("[data-action='edit-user']").forEach((button) => button.addEventListener("click", () => {
     editUserId = button.dataset.id;
     render();
@@ -1733,6 +1943,10 @@ function bindEvents() {
     closingFilters[input.name] = input.value;
     render();
   }));
+  document.querySelectorAll("[data-tank-measurement-filter] input, [data-tank-measurement-filter] select").forEach((input) => input.addEventListener("change", () => {
+    tankMeasurementFilters[input.name] = input.value;
+    render();
+  }));
   document.querySelector("[data-form='login']")?.addEventListener("submit", onLogin);
   document.querySelector("[data-form='fueling']")?.addEventListener("submit", onFueling);
   document.querySelector("[data-form='fueling']")?.addEventListener("input", previewFueling);
@@ -1746,6 +1960,15 @@ function bindEvents() {
   document.querySelector("[data-form='user']")?.addEventListener("submit", onUser);
   document.querySelector("[data-form='closing']")?.addEventListener("submit", onClosing);
   document.querySelector("[data-form='edit-closing']")?.addEventListener("submit", onEditClosing);
+  const tankMeasurementForm = document.querySelector("[data-form='tank-measurement']");
+  tankMeasurementForm?.addEventListener("submit", onTankMeasurement);
+  tankMeasurementForm?.addEventListener("input", updateTankMeasurementPreview);
+  tankMeasurementForm?.addEventListener("change", updateTankMeasurementPreview);
+  tankMeasurementForm?.querySelector("select[name='company']")?.addEventListener("change", (event) => {
+    const tankSelect = tankMeasurementForm.querySelector("select[name='tankId']");
+    tankSelect.innerHTML = `<option value="">Selecione</option>${tankOptions(event.currentTarget.value)}`;
+    updateTankMeasurementPreview({ currentTarget: tankMeasurementForm });
+  });
   document.querySelectorAll("[data-diesel-view]").forEach((button) => button.addEventListener("click", () => {
     dieselReceivingView = button.dataset.dieselView;
     dieselReceivingDetailId = "";
@@ -1830,6 +2053,7 @@ function bindFuelingPhotoFlow() {
     { form: document.querySelector("[data-form='fueling']"), names: ["vehiclePhoto", "tachographPhoto", "pumpPhoto"] },
     { form: document.querySelector("[data-form='closing']"), names: ["photo"] },
     { form: document.querySelector("[data-form='edit-closing']"), names: ["photo"] },
+    { form: document.querySelector("[data-form='tank-measurement']"), names: ["photo"] },
   ];
   forms.forEach(({ form, names }) => {
     if (!form) return;
@@ -2410,6 +2634,66 @@ async function onEditClosing(event) {
     editClosingId = "";
     const cycle = latestClosingCycle(data.pump);
     toast(cycle.status === "divergent" ? `Encerrante alterado com alerta: diferença de ${formatNumber(cycle.diff)} litros.` : `Encerrante alterado.${cycle.rolledOver ? " Virada em 100.000,00 considerada." : ""}`);
+    render();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function updateTankMeasurementPreview(event) {
+  const form = event.currentTarget?.matches?.("[data-form='tank-measurement']") ? event.currentTarget : event.currentTarget?.closest?.("[data-form='tank-measurement']") || document.querySelector("[data-form='tank-measurement']");
+  const preview = form?.querySelector("[data-tank-measurement-preview]");
+  if (!form || !preview) return;
+  const data = Object.fromEntries(new FormData(form));
+  const conversion = tankMeasurementConversion(data.tankId, data.measureMm);
+  if (!data.tankId || !String(data.measureMm || "").trim()) {
+    preview.className = "measurement-preview info";
+    preview.textContent = "Informe a medida em mm para visualizar a conversão em litros.";
+    return;
+  }
+  if (!conversion) {
+    preview.className = "measurement-preview bad";
+    preview.textContent = "Esta medida não existe na tabela de arqueação do tanque selecionado.";
+    return;
+  }
+  preview.className = "measurement-preview ok";
+  preview.innerHTML = `<span>Conversão da arqueação</span><strong>${formatNumber(conversion.measureMm)} mm = ${formatNumber(conversion.liters)} litros</strong>`;
+}
+
+async function onTankMeasurement(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form));
+  if (!form.reportValidity()) return;
+  const measureMm = parseLocaleNumber(data.measureMm);
+  const conversion = tankMeasurementConversion(data.tankId, measureMm);
+  if (!conversion) return toast("A medida informada não existe na tabela de arqueação deste tanque.");
+  const measuredAt = currentUser()?.role === "admin" && data.measuredAt ? new Date(data.measuredAt).toISOString() : new Date().toISOString();
+  const photo = await fileToDataUrl(form.photo.files[0]);
+  if (!photo) return toast("A foto da régua do tanque é obrigatória.");
+  const duplicate = tankMeasurementDuplicateCandidate(data.tankId, data.pump, data.kind, measuredAt);
+  if (duplicate) {
+    const confirmed = window.confirm(`Já existe uma medição tanque ${data.kind === "final" ? "final" : "inicial"} para este ciclo.\n\nAtual: ${formatNumber(duplicate.measureMm)} mm = ${formatNumber(duplicate.liters)} L\n\nDeseja substituir pela nova medição?`);
+    if (!confirmed) return;
+  }
+  try {
+    const payload = await apiRequest("/tank-measurements", {
+      method: "POST",
+      body: JSON.stringify({
+        ...(currentUser()?.role === "admin" ? { measuredAt } : {}),
+        company: data.company,
+        tankId: data.tankId,
+        pump: data.pump,
+        kind: data.kind,
+        measureMm,
+        photo,
+        ...(duplicate ? { replaceId: duplicate.id } : {}),
+      }),
+    });
+    if (payload.replaced) state.tankMeasurements = state.tankMeasurements.map((item) => item.id === payload.measurement.id ? payload.measurement : item);
+    else state.tankMeasurements.unshift(payload.measurement);
+    saveState();
+    toast(`${data.kind === "final" ? "Medição tanque final" : "Medição tanque inicial"} ${payload.replaced ? "substituída" : "salva"}: ${formatNumber(payload.measurement.liters)} litros.`);
     render();
   } catch (error) {
     toast(error.message);
