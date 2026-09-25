@@ -337,6 +337,28 @@ button {
   min-width: 1640px;
 }
 
+.audit-filters {
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  max-width: 820px;
+}
+
+.audit-pump-value {
+  display: block;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.audit-pump-value:last-child {
+  margin-bottom: 0;
+}
+
+.audit-pump-value strong {
+  display: inline-block;
+  min-width: 24px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .field {
   display: grid;
   gap: 7px;

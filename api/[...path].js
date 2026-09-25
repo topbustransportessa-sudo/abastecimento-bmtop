@@ -739,11 +739,17 @@ async function handle(req, res) {
     return send(res, 200, { deleted: rows.map(mapFueling) });
   }
 
+  if (req.method === "GET" && route === "/tank-measurements/config") {
+    const [tanks, arqueacao] = await Promise.all([
+      supabase("diesel_tanks?company=eq.Topbus&active=eq.true&select=*&order=name.asc"),
+      supabase("diesel_arqueacao?company=eq.Topbus&active=eq.true&select=*&order=measure_mm.asc"),
+    ]);
+    return send(res, 200, { tanks: tanks.map(mapDieselTank), arqueacao: arqueacao.map(mapDieselArqueacao) });
+  }
+
   if (req.method === "POST" && route === "/tank-measurements") {
     const body = await readBody(req);
-    const userCompanies = await dieselCompaniesForUser(user);
-    requireDieselCompanyAccess(userCompanies, body.company);
-    if (!body.company || !body.tankId || !body.pump || !["initial", "final"].includes(body.kind) || body.measureMm === undefined || !body.photo) {
+    if (!["initial", "final"].includes(body.kind) || body.measureMm === undefined || !body.photo) {
       return send(res, 400, { error: "Preencha todos os campos e tire a foto da medicao do tanque." });
     }
     const measuredAt = user.role === "admin" && body.measuredAt ? new Date(body.measuredAt) : new Date();
@@ -751,18 +757,19 @@ async function handle(req, res) {
     const measureMm = parseRequestNumber(body.measureMm);
     if (!Number.isFinite(measureMm) || measureMm < 0) return send(res, 400, { error: "Informe uma medida em mm valida." });
 
-    const tankRows = await supabase(`diesel_tanks?id=eq.${encodeURIComponent(body.tankId)}&company=eq.${encodeURIComponent(body.company)}&active=eq.true&select=id`);
-    if (!tankRows[0]) return send(res, 400, { error: "Tanque invalido ou inativo para esta empresa." });
-    const table = await supabase(`diesel_arqueacao?tank_id=eq.${encodeURIComponent(body.tankId)}&company=eq.${encodeURIComponent(body.company)}&active=eq.true&select=measure_mm,liters`);
+    const tankRows = await supabase("diesel_tanks?company=eq.Topbus&active=eq.true&select=id&order=name.asc&limit=1");
+    const tankId = tankRows[0]?.id;
+    if (!tankId) return send(res, 400, { error: "Nenhum tanque ativo da Topbus foi encontrado." });
+    const table = await supabase(`diesel_arqueacao?tank_id=eq.${encodeURIComponent(tankId)}&company=eq.Topbus&active=eq.true&select=measure_mm,liters`);
     const conversion = exactArqueacao(table, measureMm);
     if (!conversion) return send(res, 400, { error: `A medida ${measureMm} mm nao existe na tabela de arqueacao deste tanque.` });
 
     const photo = await uploadPhoto(body.photo, "tank-measurements");
     const record = {
       measured_at: measuredAt.toISOString(),
-      company: body.company,
-      tank_id: body.tankId,
-      pump: body.pump,
+      company: "Topbus",
+      tank_id: tankId,
+      pump: "topbus",
       kind: body.kind,
       measure_mm: measureMm,
       liters: Number(conversion.liters),
@@ -773,8 +780,8 @@ async function handle(req, res) {
       const existingRows = await supabase(`tank_measurements?id=eq.${encodeURIComponent(body.replaceId)}&select=*`);
       const existing = existingRows[0];
       if (!existing) return send(res, 404, { error: "Medicao para substituicao nao encontrada." });
-      if (existing.tank_id !== body.tankId || existing.pump !== body.pump || existing.kind !== body.kind) {
-        return send(res, 400, { error: "A medicao selecionada nao corresponde ao mesmo tanque, bomba e tipo." });
+      if (existing.tank_id !== tankId || existing.kind !== body.kind) {
+        return send(res, 400, { error: "A medicao selecionada nao corresponde ao mesmo tanque e tipo." });
       }
       const rows = await supabase(`tank_measurements?id=eq.${encodeURIComponent(body.replaceId)}`, { method: "PATCH", body: JSON.stringify(record) });
       return send(res, 200, { measurement: mapTankMeasurement(rows[0]), replaced: true });
