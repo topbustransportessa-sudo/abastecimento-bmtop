@@ -337,6 +337,28 @@ button {
   min-width: 1640px;
 }
 
+.audit-total-row td {
+  border-top: 2px solid #94a3b8;
+  background: #eef3f8;
+}
+
+.audit-pump-row td {
+  background: #fff;
+  color: #334155;
+}
+
+.audit-pump-row td:first-child,
+.audit-pump-row td:nth-child(2) {
+  padding-left: 18px;
+}
+
+.audit-help {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .audit-filters {
   grid-template-columns: repeat(3, minmax(160px, 1fr));
   max-width: 820px;
@@ -887,6 +909,27 @@ td {
   margin-top: 14px;
 }
 
+.audit-fuelings-modal {
+  width: min(100%, 1120px);
+}
+
+.audit-fueling-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.audit-fueling-grid .empty-state {
+  grid-column: 1 / -1;
+}
+
+.photo-card.empty {
+  min-height: 150px;
+  display: grid;
+  align-content: center;
+}
+
 .photo-card {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1022,6 +1065,7 @@ td {
   .quick-actions,
   .detail-grid,
   .photo-grid,
+  .audit-fueling-grid,
   .simulation-grid {
     grid-template-columns: 1fr;
   }

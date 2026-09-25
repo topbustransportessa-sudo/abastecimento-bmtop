@@ -36,6 +36,7 @@ let editFuelingId = "";
 let editClosingId = "";
 let closingPhotoPreview = null;
 let tankMeasurementPhotoPreview = null;
+let auditFuelingsPreview = null;
 let tankMeasurementConfigLoading = false;
 let tankMeasurementConfigLoaded = false;
 let editUserId = "";
@@ -778,12 +779,32 @@ function filteredAuditCycles() {
   });
 }
 
-function closingGroupPhotoButtons(group, phase) {
+function renderAuditPumpRows(group) {
   return TOPBUS_AUDIT_PUMPS.map((pump) => {
-    const row = group.byPump[pump]?.[phase];
-    if (!row) return `<span class="audit-pump-value"><strong>B${pump}</strong> -</span>`;
-    const value = phase === "initial" ? row.initial : row.final;
-    return `<span class="audit-pump-value"><strong>B${pump}</strong> ${closingPhotoButton(row, value)}</span>`;
+    const cycle = group.byPump[pump];
+    if (!cycle) return `<tr class="audit-pump-row"><td>-</td><td>-</td><td><strong>Bomba ${pump}</strong></td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>0,00</td><td>-</td><td>0,00</td><td>-</td><td>-</td><td>0</td><td><span class="badge info">Pendente</span></td></tr>`;
+    const diff = cycle.final ? cycle.measured - cycle.launched : null;
+    const ok = diff !== null && Math.abs(diff) <= 1;
+    const status = cycle.final ? (ok ? "OK" : "Divergência") : "Pendente";
+    const klass = cycle.final ? (ok ? "ok" : "bad") : "info";
+    const start = cycle.start || closingTime(cycle.initial);
+    const end = cycle.end || start;
+    return `<tr class="audit-pump-row">
+      <td>${cycle.initial ? formatDate(cycle.initial.createdAt) : "-"}</td>
+      <td>${cycle.final ? formatDate(cycle.final.createdAt) : "-"}</td>
+      <td><strong>Bomba ${pump}</strong></td>
+      <td>-</td>
+      <td>${cycle.initial ? closingPhotoButton(cycle.initial, cycle.initial.initial) : "-"}</td>
+      <td>${cycle.final ? closingPhotoButton(cycle.final, cycle.final.final) : "-"}</td>
+      <td>-</td><td>-</td>
+      <td>${formatNumber(cycle.measured)}${cycle.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td>
+      <td>-</td>
+      <td>${formatNumber(cycle.launched)}${cycle.launchedNote ? `<small class="table-note">${cycle.launchedNote}</small>` : ""}</td>
+      <td>${diff === null ? "-" : `<span class="badge ${ok ? "ok" : "bad"}">${formatNumber(diff)}</span>`}</td>
+      <td>-</td>
+      <td>${start ? `<button class="table-link" type="button" data-action="audit-fuelings" data-pump="${pump}" data-start="${start}" data-end="${end}">${cycle.fuels.length} - Ver fotos</button>` : "0"}</td>
+      <td><span class="badge ${klass}">${status}</span></td>
+    </tr>`;
   }).join("");
 }
 
@@ -804,6 +825,31 @@ function renderTankMeasurementPhotoModal() {
       <section class="modal photo-modal">
         <div class="panel-header"><div><h2>Foto da medição tanque ${item.kind === "final" ? "final" : "inicial"}</h2><p>${tank?.name || "Tanque Topbus"} - Bombas 1, 5 e 6 - ${formatDate(item.measuredAt)}</p></div><button class="icon-btn" data-action="close-tank-measurement-photo" title="Fechar">${icon("close")}</button></div>
         <img class="modal-photo" src="${item.photo}" alt="Foto da régua do tanque">
+      </section>
+    </div>`;
+}
+
+function renderAuditFuelingsModal() {
+  if (!auditFuelingsPreview) return "";
+  const items = closingFuelsInPeriod(auditFuelingsPreview.pump, auditFuelingsPreview.start, auditFuelingsPreview.end)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  return `
+    <div class="modal-backdrop" role="dialog" aria-modal="true">
+      <section class="modal audit-fuelings-modal">
+        <div class="panel-header">
+          <div><h2>Fotos dos abastecimentos - Bomba ${auditFuelingsPreview.pump}</h2><p>${items.length} lançamento(s) entre ${formatDate(new Date(auditFuelingsPreview.start).toISOString())} e ${formatDate(new Date(auditFuelingsPreview.end).toISOString())}.</p></div>
+          <button class="icon-btn" data-action="close-audit-fuelings" title="Fechar">${icon("close")}</button>
+        </div>
+        <div class="audit-fueling-grid">
+          ${items.map((item) => {
+            const vehicle = vehicleById(item.vehicleId);
+            const user = userById(item.userId);
+            const details = `${vehicle?.code || "Veículo"} - ${formatNumber(item.liters)} L - ${user?.name || "-"}`;
+            return item.pumpPhoto
+              ? `<a class="photo-card" href="${item.pumpPhoto}" target="_blank" rel="noopener"><img src="${item.pumpPhoto}" alt="Foto da Bomba ${item.pump}"><span>${formatDate(item.createdAt)}</span><strong>${details}</strong></a>`
+              : `<div class="photo-card empty"><span>${formatDate(item.createdAt)}</span><strong>${details} - Sem foto</strong></div>`;
+          }).join("") || `<div class="empty-state">Nenhum abastecimento encontrado neste intervalo.</div>`}
+        </div>
       </section>
     </div>`;
 }
@@ -846,6 +892,7 @@ function render() {
       ${renderEditClosingModal()}
       ${renderClosingPhotoModal()}
       ${renderTankMeasurementPhotoModal()}
+      ${renderAuditFuelingsModal()}
       ${renderDeleteFuelingModal()}
       ${renderEditUserModal()}
       ${renderChangePasswordModal()}
@@ -1553,14 +1600,15 @@ function renderAudit() {
   if (!tankMeasurementConfigLoaded && !tankMeasurementConfigLoading) ensureTankMeasurementConfig().then(() => route === "audit" && render());
   const rows = filteredAuditCycles();
   return `
-    <section class="panel"><div class="panel-header"><div><h2>Conciliação Topbus por período</h2><p>${rows.length} ciclo(s). Soma das bombas 1, 5 e 6. Tolerâncias: encerrante x abastecimentos ±1 L; encerrante x medição tanque ±30 L.</p></div></div>${renderAuditFilters()}</section>
+    <section class="panel"><div class="panel-header"><div><h2>Conciliação Topbus por período</h2><p>${rows.length} ciclo(s). Soma das bombas 1, 5 e 6. Tolerâncias: encerrante x abastecimentos ±1 L; encerrante x medição tanque ±30 L.</p><small class="audit-help">A linha destacada mostra o total do turno. Nas linhas de cada bomba, clique em "Ver fotos" para conferir a bomba registrada nas imagens.</small></div></div>${renderAuditFilters()}</section>
     <section class="table-wrap audit-table"><table><thead><tr><th>Início</th><th>Fim</th><th>Bomba</th><th>Tanque</th><th>Enc. inicial</th><th>Enc. final</th><th>Tanque inicial</th><th>Tanque final</th><th>Litragem encerrante</th><th>Litragem medição tanque</th><th>Soma abastecimentos</th><th>Dispersão abastec.</th><th>Dispersão tanque</th><th>Abastecimentos</th><th>Status</th></tr></thead><tbody>
       ${rows.map((item) => {
         const metrics = auditCycleMetrics(item);
         const tank = dieselReceivingData.tanks.find((candidate) => candidate.id === metrics.tankCycle?.tankId);
         const statusLabel = metrics.status === "ok" ? "OK" : metrics.status === "divergent" ? "Divergência" : "Pendente";
         const klass = metrics.status === "ok" ? "ok" : metrics.status === "divergent" ? "bad" : "info";
-        return `<tr><td>${item.start ? formatDate(new Date(item.start).toISOString()) : "-"}</td><td>${item.final && item.end ? formatDate(new Date(item.end).toISOString()) : "-"}</td><td>Bombas 1 + 5 + 6</td><td>${tank ? `${tank.company}<small class="table-note">${tank.name}</small>` : "-"}</td><td>${closingGroupPhotoButtons(item, "initial")}</td><td>${closingGroupPhotoButtons(item, "final")}</td><td>${metrics.tankCycle?.initial ? tankMeasurementPhotoButton(metrics.tankCycle.initial) : "-"}</td><td>${metrics.tankCycle?.final ? tankMeasurementPhotoButton(metrics.tankCycle.final) : "-"}</td><td>${formatNumber(item.measured)}${item.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td><td>${metrics.tankLiters === null ? "-" : formatNumber(metrics.tankLiters)}</td><td>${formatNumber(item.launched)}${item.launchedNote ? `<small class="table-note">${item.launchedNote}</small>` : ""}</td><td>${metrics.fuelDiff === null ? "-" : `<span class="badge ${metrics.fuelOk ? "ok" : "bad"}">${formatNumber(metrics.fuelDiff)}</span>`}</td><td>${metrics.tankDiff === null ? "-" : `<span class="badge ${metrics.tankOk ? "ok" : "bad"}">${formatNumber(metrics.tankDiff)}</span>`}</td><td>${item.fuels.length}</td><td><span class="badge ${klass}">${statusLabel}</span></td></tr>`;
+        const totalRow = `<tr class="audit-total-row"><td>${item.start ? formatDate(new Date(item.start).toISOString()) : "-"}</td><td>${item.final && item.end ? formatDate(new Date(item.end).toISOString()) : "-"}</td><td><strong>Total 1 + 5 + 6</strong></td><td>${tank ? `${tank.company}<small class="table-note">${tank.name}</small>` : "-"}</td><td colspan="2"><span class="table-note">Detalhado por bomba abaixo</span></td><td>${metrics.tankCycle?.initial ? tankMeasurementPhotoButton(metrics.tankCycle.initial) : "-"}</td><td>${metrics.tankCycle?.final ? tankMeasurementPhotoButton(metrics.tankCycle.final) : "-"}</td><td>${formatNumber(item.measured)}${item.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td><td>${metrics.tankLiters === null ? "-" : formatNumber(metrics.tankLiters)}</td><td>${formatNumber(item.launched)}${item.launchedNote ? `<small class="table-note">${item.launchedNote}</small>` : ""}</td><td>${metrics.fuelDiff === null ? "-" : `<span class="badge ${metrics.fuelOk ? "ok" : "bad"}">${formatNumber(metrics.fuelDiff)}</span>`}</td><td>${metrics.tankDiff === null ? "-" : `<span class="badge ${metrics.tankOk ? "ok" : "bad"}">${formatNumber(metrics.tankDiff)}</span>`}</td><td>${item.fuels.length}</td><td><span class="badge ${klass}">${statusLabel}</span></td></tr>`;
+        return `${totalRow}${renderAuditPumpRows(item)}`;
       }).join("") || `<tr><td colspan="15">Nenhuma conciliação encontrada.</td></tr>`}
     </tbody></table></section>`;
 }
@@ -1996,6 +2044,18 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-action='close-tank-measurement-photo']").forEach((button) => button.addEventListener("click", () => {
     tankMeasurementPhotoPreview = null;
+    render();
+  }));
+  document.querySelectorAll("[data-action='audit-fuelings']").forEach((button) => button.addEventListener("click", () => {
+    auditFuelingsPreview = {
+      pump: button.dataset.pump,
+      start: Number(button.dataset.start),
+      end: Number(button.dataset.end),
+    };
+    render();
+  }));
+  document.querySelectorAll("[data-action='close-audit-fuelings']").forEach((button) => button.addEventListener("click", () => {
+    auditFuelingsPreview = null;
     render();
   }));
   document.querySelectorAll("[data-action='edit-user']").forEach((button) => button.addEventListener("click", () => {
