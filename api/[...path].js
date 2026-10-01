@@ -246,11 +246,11 @@ function mapTankMeasurement(row) {
 async function getData() {
   const [users, vehicles, fuelings, pumpClosings, audits, tankMeasurements] = await Promise.all([
     supabase("app_users?select=id,name,email,role,active,created_at&order=name.asc"),
-    supabase("vehicles?select=*&order=code.asc"),
-    supabaseAll("fuelings?select=*&order=created_at.desc"),
-    supabaseAll("pump_closings?select=*&order=date.desc,created_at.desc"),
-    supabaseAll("fueling_audits?select=*&order=changed_at.desc").catch(() => []),
-    supabaseAll("tank_measurements?select=*&order=measured_at.desc").catch(() => []),
+    supabase("vehicles?select=id,code,plate,min_avg,max_avg,active&order=code.asc"),
+    supabaseAll("fuelings?select=id,created_at,vehicle_id,vehicle_photo_url,tachograph_photo_url,pump,pump_photo_url,km,liters,observation,user_id,source,offline_created_at,synced_at&order=created_at.desc"),
+    supabaseAll("pump_closings?select=id,date,pump,initial,final,photo_url,created_at,user_id&order=date.desc,created_at.desc"),
+    supabaseAll("fueling_audits?select=id,fueling_id,changed_at,changed_by,justification,changes&order=changed_at.desc").catch(() => []),
+    supabaseAll("tank_measurements?select=id,created_at,measured_at,company,tank_id,pump,kind,measure_mm,liters,photo_url,user_id&order=measured_at.desc").catch(() => []),
   ]);
   return {
     users,

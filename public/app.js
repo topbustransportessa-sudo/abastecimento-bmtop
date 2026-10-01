@@ -53,6 +53,7 @@ let showChangePassword = false;
 let fuelingSubmitting = false;
 let offlinePendingCount = 0;
 let offlineSyncing = false;
+let initialDataRefreshing = false;
 let dieselReceivingData = { companies: [], tanks: [], arqueacao: [], tolerances: [], receipts: [], audits: [] };
 let dieselReceivingLoading = false;
 let dieselReceivingView = "launch";
@@ -263,16 +264,23 @@ async function syncOfflineFuelings() {
 }
 
 async function init() {
-  await refreshOfflinePendingCount();
   if (!sessionToken) {
     renderLogin();
     return;
   }
+
+  initialDataRefreshing = true;
+  if (currentUser()) render();
+  else renderLoading();
+
+  const offlineCountPromise = refreshOfflinePendingCount();
   try {
-    await refreshData();
+    await Promise.all([refreshData(), offlineCountPromise]);
+    initialDataRefreshing = false;
     render();
     syncOfflineFuelings();
   } catch (error) {
+    initialDataRefreshing = false;
     if (error.status === 401) {
       clearSession();
       renderLogin();
@@ -974,10 +982,26 @@ function render() {
 }
 
 function renderOfflineStatus() {
+  if (initialDataRefreshing) return `<span class="sync-status info">Atualizando...</span>`;
   if (offlineSyncing) return `<span class="sync-status info">Sincronizando...</span>`;
   if (offlinePendingCount) return `<button class="sync-status warn" data-action="sync-offline">${offlinePendingCount} pendente(s)</button>`;
   if (!navigator.onLine) return `<span class="sync-status bad">Offline</span>`;
   return `<span class="sync-status ok">Online</span>`;
+}
+
+function renderLoading() {
+  app.innerHTML = `
+    <section class="login-shell">
+      <div class="login-panel" role="status" aria-live="polite">
+        <div class="brand-lockup">
+          <img src="assets/logo-transimao.png" alt="Transimão">
+          <div>
+            <h1 class="brand-title">Abastecimento BMTOP</h1>
+            <p class="brand-subtitle">Carregando dados...</p>
+          </div>
+        </div>
+      </div>
+    </section>`;
 }
 
 function renderLogin() {
