@@ -943,7 +943,7 @@ function render() {
       ${renderSidebar(user)}
       <section class="main">
         <header class="topbar">
-          <div class="actions">
+          <div class="actions ${route === "fuelings" ? "has-primary" : ""}">
             <button class="icon-btn mobile-menu" data-action="toggle-menu" title="Menu">${icon(sidebarOpen ? "close" : "menu")}</button>
             <div>
               <h1 class="page-title">${pageMeta().title}</h1>
@@ -1206,7 +1206,7 @@ function renderFuelings() {
       </div>
       ${renderFilters()}
     </section>
-    <section class="table-wrap">
+    <section class="table-wrap mobile-card-table">
       <table>
         <thead><tr>
           ${sortableHeader("Data", "date")}
@@ -1229,21 +1229,21 @@ function renderFuelings() {
             const data = consumption(item);
             const isAdmin = currentUser()?.role === "admin";
             return `<tr>
-              <td>${formatDate(item.createdAt)}</td>
-              <td>${fuelingOriginBadge(item)}</td>
-              <td>${vehicleById(item.vehicleId)?.code || "-"}</td>
-              <td>${moneyless(item.km)}</td>
-              <td>${data ? moneyless(data.distance) : "-"}</td>
-              <td>${formatNumber(item.liters)}</td>
-              <td>${data ? formatNumber(data.average) : "-"}</td>
-              <td><span class="badge ${status.className}">${status.label}</span></td>
-              <td>${item.pump}</td>
-              <td>${userById(item.userId)?.name || "-"}</td>
-              <td>${fuelingObservation(item) || "-"}</td>
-              <td>${[item.vehiclePhoto, item.tachographPhoto, item.pumpPhoto].filter(Boolean).length} anexos</td>
-              <td><div class="row-actions"><button class="icon-btn" data-action="detail-fueling" data-id="${item.id}" title="Detalhes">${icon("dashboard")}</button>${isAdmin ? `<button class="icon-btn" data-action="edit-fueling" data-id="${item.id}" title="Editar">${icon("edit")}</button><button class="icon-btn danger" data-action="request-delete-fueling" data-id="${item.id}" title="Excluir">${icon("trash")}</button>` : ""}</div></td>
+              <td data-label="Data">${formatDate(item.createdAt)}</td>
+              <td data-label="Origem">${fuelingOriginBadge(item)}</td>
+              <td data-label="Veículo">${vehicleById(item.vehicleId)?.code || "-"}</td>
+              <td data-label="Km">${moneyless(item.km)}</td>
+              <td data-label="Km percorrido">${data ? moneyless(data.distance) : "-"}</td>
+              <td data-label="Litros">${formatNumber(item.liters)}</td>
+              <td data-label="Média">${data ? formatNumber(data.average) : "-"}</td>
+              <td data-label="Status"><span class="badge ${status.className}">${status.label}</span></td>
+              <td data-label="Bomba">${item.pump}</td>
+              <td data-label="Frentista">${userById(item.userId)?.name || "-"}</td>
+              <td data-label="Observação">${fuelingObservation(item) || "-"}</td>
+              <td data-label="Fotos">${[item.vehiclePhoto, item.tachographPhoto, item.pumpPhoto].filter(Boolean).length} anexos</td>
+              <td data-label="Ações"><div class="row-actions"><button class="icon-btn" data-action="detail-fueling" data-id="${item.id}" title="Detalhes">${icon("dashboard")}</button>${isAdmin ? `<button class="icon-btn" data-action="edit-fueling" data-id="${item.id}" title="Editar">${icon("edit")}</button><button class="icon-btn danger" data-action="request-delete-fueling" data-id="${item.id}" title="Excluir">${icon("trash")}</button>` : ""}</div></td>
             </tr>`;
-          }).join("") || `<tr><td colspan="13">Nenhum abastecimento encontrado.</td></tr>`}
+          }).join("") || `<tr class="mobile-table-empty"><td colspan="13">Nenhum abastecimento encontrado.</td></tr>`}
         </tbody>
       </table>
     </section>
@@ -1413,9 +1413,9 @@ function renderPumpSummary() {
     const item = latestClosingCycle(pump);
     const klass = item.status === "ok" ? "ok" : item.status === "divergent" ? "bad" : "info";
     const status = item.status === "ok" ? "OK" : item.status === "divergent" ? "Divergência" : `Pendente${item.pendingReason ? `: ${item.pendingReason}` : ""}`;
-    return `<tr><td>Bomba ${pump}</td><td>${item.initial ? closingPhotoButton(item.initial, item.initial.initial) : "-"}</td><td>${item.initial ? formatDate(item.initial.createdAt) : "-"}</td><td>${item.final ? closingPhotoButton(item.final, item.final.final) : "-"}</td><td>${item.final ? formatDate(item.final.createdAt) : "-"}</td><td>${formatNumber(item.measured)}${item.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td><td>${formatNumber(item.launched)}${item.launchedNote ? `<small class="table-note">${item.launchedNote}</small>` : ""}</td><td><span class="badge ${klass}">${formatNumber(item.diff)}</span></td><td><span class="badge ${klass}">${status}</span></td></tr>`;
+    return `<tr><td data-label="Bomba">Bomba ${pump}</td><td data-label="Inicial">${item.initial ? closingPhotoButton(item.initial, item.initial.initial) : "-"}</td><td data-label="Hora inicial">${item.initial ? formatDate(item.initial.createdAt) : "-"}</td><td data-label="Final">${item.final ? closingPhotoButton(item.final, item.final.final) : "-"}</td><td data-label="Hora final">${item.final ? formatDate(item.final.createdAt) : "-"}</td><td data-label="Litragem encerrante">${formatNumber(item.measured)}${item.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td><td data-label="Soma abastecimentos">${formatNumber(item.launched)}${item.launchedNote ? `<small class="table-note">${item.launchedNote}</small>` : ""}</td><td data-label="Diferença"><span class="badge ${klass}">${formatNumber(item.diff)}</span></td><td data-label="Status"><span class="badge ${klass}">${status}</span></td></tr>`;
   }).join("");
-  return `<div class="table-wrap"><table><thead><tr><th>Bomba</th><th>Inicial</th><th>Hora inicial</th><th>Final</th><th>Hora final</th><th>Litragem encerrante</th><th>Soma abastecimentos</th><th>Diferença</th><th>Status</th></tr></thead><tbody>${lines}</tbody></table></div>`;
+  return `<div class="table-wrap mobile-card-table"><table><thead><tr><th>Bomba</th><th>Inicial</th><th>Hora inicial</th><th>Final</th><th>Hora final</th><th>Litragem encerrante</th><th>Soma abastecimentos</th><th>Diferença</th><th>Status</th></tr></thead><tbody>${lines}</tbody></table></div>`;
 }
 
 function renderClosingFilters() {
@@ -1460,25 +1460,25 @@ function renderClosingCycleList() {
       </div>
       ${renderClosingFilters()}
     </section>
-    <section class="table-wrap">
+    <section class="table-wrap mobile-card-table">
       <table>
         <thead><tr><th>Início</th><th>Fim</th><th>Bomba</th><th>Inicial</th><th>Final</th><th>Litragem encerrante</th><th>Soma abastecimentos</th><th>Diferença</th><th>Abastecimentos</th><th>Status</th></tr></thead>
         <tbody>${rows.map((item) => {
           const klass = item.status === "ok" ? "ok" : item.status === "divergent" ? "bad" : "info";
           const status = item.status === "ok" ? "OK" : item.status === "divergent" ? "Divergência" : `Pendente${item.pendingReason ? `: ${item.pendingReason}` : ""}`;
           return `<tr>
-            <td>${item.initial ? formatDate(item.initial.createdAt) : "-"}</td>
-            <td>${item.final ? formatDate(item.final.createdAt) : "-"}</td>
-            <td>Bomba ${item.pump}</td>
-            <td>${item.initial ? closingPhotoButton(item.initial, item.initial.initial) : "-"}</td>
-            <td>${item.final ? closingPhotoButton(item.final, item.final.final) : "-"}</td>
-            <td>${formatNumber(item.measured)}${item.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td>
-            <td>${formatNumber(item.launched)}${item.launchedNote ? `<small class="table-note">${item.launchedNote}</small>` : ""}</td>
-            <td><span class="badge ${klass}">${formatNumber(item.diff)}</span></td>
-            <td>${item.fuels.length}</td>
-            <td><span class="badge ${klass}">${status}</span></td>
+            <td data-label="Início">${item.initial ? formatDate(item.initial.createdAt) : "-"}</td>
+            <td data-label="Fim">${item.final ? formatDate(item.final.createdAt) : "-"}</td>
+            <td data-label="Bomba">Bomba ${item.pump}</td>
+            <td data-label="Inicial">${item.initial ? closingPhotoButton(item.initial, item.initial.initial) : "-"}</td>
+            <td data-label="Final">${item.final ? closingPhotoButton(item.final, item.final.final) : "-"}</td>
+            <td data-label="Litragem encerrante">${formatNumber(item.measured)}${item.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td>
+            <td data-label="Soma abastecimentos">${formatNumber(item.launched)}${item.launchedNote ? `<small class="table-note">${item.launchedNote}</small>` : ""}</td>
+            <td data-label="Diferença"><span class="badge ${klass}">${formatNumber(item.diff)}</span></td>
+            <td data-label="Abastecimentos">${item.fuels.length}</td>
+            <td data-label="Status"><span class="badge ${klass}">${status}</span></td>
           </tr>`;
-        }).join("") || `<tr><td colspan="10">Nenhuma conciliação encontrada.</td></tr>`}</tbody>
+        }).join("") || `<tr class="mobile-table-empty"><td colspan="10">Nenhuma conciliação encontrada.</td></tr>`}</tbody>
       </table>
     </section>
   `;
@@ -1869,19 +1869,19 @@ function renderClosings() {
         </div>
       </div>
     </section>
-    <section class="table-wrap">
+    <section class="table-wrap mobile-card-table">
       <table>
         <thead><tr><th>Data</th><th>Hora</th><th>Bomba</th><th>Tipo</th><th>Valor</th><th>Foto</th><th>Usuário</th><th>Ações</th></tr></thead>
         <tbody>${state.pumpClosings.slice().sort((a,b) => closingTime(b) - closingTime(a)).map((item) => `<tr>
-          <td>${item.date.split("-").reverse().join("/")}</td>
-          <td>${formatDate(item.createdAt).split(", ")[1] || "-"}</td>
-          <td>${item.pump}</td>
-          <td>${closingKindLabel(item)}</td>
-          <td>${formatNumber(closingValue(item))}</td>
-          <td>${item.photo ? `<a href="${item.photo}" target="_blank" rel="noopener">Ver foto</a>` : "-"}</td>
-          <td>${userById(item.userId)?.name || "-"}</td>
-          <td>${admin ? `<button class="icon-btn" data-action="edit-closing" data-id="${item.id}" title="Editar">${icon("edit")}</button>` : "-"}</td>
-        </tr>`).join("") || `<tr><td colspan="8">Nenhum encerrante lançado.</td></tr>`}</tbody>
+          <td data-label="Data">${item.date.split("-").reverse().join("/")}</td>
+          <td data-label="Hora">${formatDate(item.createdAt).split(", ")[1] || "-"}</td>
+          <td data-label="Bomba">${item.pump}</td>
+          <td data-label="Tipo">${closingKindLabel(item)}</td>
+          <td data-label="Valor">${formatNumber(closingValue(item))}</td>
+          <td data-label="Foto">${item.photo ? `<a href="${item.photo}" target="_blank" rel="noopener">Ver foto</a>` : "-"}</td>
+          <td data-label="Usuário">${userById(item.userId)?.name || "-"}</td>
+          <td data-label="Ações">${admin ? `<button class="icon-btn" data-action="edit-closing" data-id="${item.id}" title="Editar">${icon("edit")}</button>` : "-"}</td>
+        </tr>`).join("") || `<tr class="mobile-table-empty"><td colspan="8">Nenhum encerrante lançado.</td></tr>`}</tbody>
       </table>
     </section>
   `;
