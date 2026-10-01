@@ -3,6 +3,7 @@ const USER_KEY = "abastecimento-bmtop-user";
 const DATA_KEY = "abastecimento-bmtop-data";
 const OFFLINE_DB = "abastecimento-bmtop-offline";
 const PUMP_COUNTER_LIMIT = 100000;
+const FUELING_PAGE_SIZE = 30;
 
 const icons = {
   dashboard: "M3 13h8V3H3v10Zm10 8h8V3h-8v18ZM3 21h8v-6H3v6Z",
@@ -28,6 +29,13 @@ let route = "dashboard";
 let filters = { from: "", to: "", vehicle: "", pump: "", status: "" };
 let closingFilters = { from: "", to: "", pump: "", status: "" };
 let fuelingsSort = { key: "date", direction: "desc" };
+let fuelingsPage = 1;
+let fuelingIndexSource = null;
+let fuelingIndexLength = -1;
+let previousFuelingById = new Map();
+let latestFuelingByVehicle = new Map();
+let fuelingsByVehicle = new Map();
+let consumptionByFuelingId = new Map();
 let sidebarOpen = false;
 let showFuelingForm = false;
 let detailFuelingId = "";
@@ -75,7 +83,24 @@ function saveState() {
   else localStorage.removeItem(SESSION_KEY);
   if (currentUserId) localStorage.setItem(USER_KEY, currentUserId);
   else localStorage.removeItem(USER_KEY);
-  localStorage.setItem(DATA_KEY, JSON.stringify(state));
+  const cachedFuelings = (state.fuelings || [])
+    .slice()
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, 300)
+    .map(({ vehiclePhoto, tachographPhoto, pumpPhoto, ...item }) => item);
+  const offlineState = {
+    users: state.users || [],
+    vehicles: state.vehicles || [],
+    fuelings: cachedFuelings,
+    pumpClosings: (state.pumpClosings || []).slice(0, 120),
+    fuelingAudits: [],
+    tankMeasurements: (state.tankMeasurements || []).slice(0, 80),
+  };
+  try {
+    localStorage.setItem(DATA_KEY, JSON.stringify(offlineState));
+  } catch {
+    localStorage.removeItem(DATA_KEY);
+  }
 }
 
 function clearSession() {
@@ -91,6 +116,7 @@ function applyRemoteData(data) {
   state.pumpClosings = data.pumpClosings || [];
   state.fuelingAudits = data.fuelingAudits || [];
   state.tankMeasurements = data.tankMeasurements || [];
+  invalidateFuelingIndexes();
 }
 
 async function apiRequest(path, options = {}) {
@@ -338,45 +364,90 @@ function filteredFuelings() {
     }));
 }
 
+function invalidateFuelingIndexes() {
+  fuelingIndexSource = null;
+  fuelingIndexLength = -1;
+  previousFuelingById = new Map();
+  latestFuelingByVehicle = new Map();
+  fuelingsByVehicle = new Map();
+  consumptionByFuelingId = new Map();
+}
+
+function ensureFuelingIndexes() {
+  if (fuelingIndexSource === state.fuelings && fuelingIndexLength === state.fuelings.length) return;
+  invalidateFuelingIndexes();
+  fuelingIndexSource = state.fuelings;
+  fuelingIndexLength = state.fuelings.length;
+
+  state.fuelings.forEach((item) => {
+    const items = fuelingsByVehicle.get(item.vehicleId) || [];
+    items.push(item);
+    fuelingsByVehicle.set(item.vehicleId, items);
+  });
+
+  fuelingsByVehicle.forEach((items, vehicleId) => {
+    items.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    let previous = null;
+    let index = 0;
+    while (index < items.length) {
+      const timestamp = new Date(items[index].createdAt).getTime();
+      let next = index + 1;
+      while (next < items.length && new Date(items[next].createdAt).getTime() === timestamp) next += 1;
+      for (let cursor = index; cursor < next; cursor += 1) previousFuelingById.set(items[cursor].id, previous);
+      previous = items[next - 1];
+      index = next;
+    }
+    latestFuelingByVehicle.set(vehicleId, items[items.length - 1]);
+  });
+}
+
 function previousFueling(item) {
-  return state.fuelings
-    .filter((candidate) => candidate.vehicleId === item.vehicleId && new Date(candidate.createdAt) < new Date(item.createdAt))
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+  ensureFuelingIndexes();
+  if (previousFuelingById.has(item.id)) return previousFuelingById.get(item.id) || undefined;
+  const itemTime = new Date(item.createdAt).getTime();
+  const items = fuelingsByVehicle.get(item.vehicleId) || [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (new Date(items[index].createdAt).getTime() < itemTime) return items[index];
+  }
+  return undefined;
 }
 
 function latestFuelingForVehicle(vehicleId) {
-  return state.fuelings
-    .filter((candidate) => candidate.vehicleId === vehicleId)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+  ensureFuelingIndexes();
+  return latestFuelingByVehicle.get(vehicleId);
 }
 
 function consumption(item) {
+  ensureFuelingIndexes();
+  if (consumptionByFuelingId.has(item.id)) return consumptionByFuelingId.get(item.id);
   const previous = previousFueling(item);
-  if (!previous || !Number(item.liters)) return null;
+  if (!previous || !Number(item.liters)) {
+    if (previousFuelingById.has(item.id)) consumptionByFuelingId.set(item.id, null);
+    return null;
+  }
   const distance = Number(item.km) - Number(previous.km);
-  if (distance <= 0) return { average: 0, distance, previousKm: previous.km, repeated: distance === 0 };
-  return { average: distance / Number(item.liters), distance, previousKm: previous.km, repeated: false };
+  const data = distance <= 0
+    ? { average: 0, distance, previousKm: previous.km, repeated: distance === 0 }
+    : { average: distance / Number(item.liters), distance, previousKm: previous.km, repeated: false };
+  if (previousFuelingById.has(item.id)) consumptionByFuelingId.set(item.id, data);
+  return data;
 }
 
 function fuelingSortValue(item, key) {
+  if (key === "date") return new Date(item.createdAt).getTime();
+  if (key === "origin") return fuelingOriginLabel(item);
+  if (key === "vehicle") return vehicleById(item.vehicleId)?.code || "";
+  if (key === "km") return Number(item.km || 0);
+  if (key === "liters") return Number(item.liters || 0);
+  if (key === "status") return consumptionStatus(item).label;
+  if (key === "pump") return Number(item.pump || 0);
+  if (key === "user") return userById(item.userId)?.name || "";
+  if (key === "observation") return fuelingObservation(item);
+  if (key === "photos") return [item.vehiclePhoto, item.tachographPhoto, item.pumpPhoto].filter(Boolean).length;
   const data = consumption(item);
-  const vehicle = vehicleById(item.vehicleId);
-  const user = userById(item.userId);
-  const values = {
-    date: new Date(item.createdAt).getTime(),
-    origin: fuelingOriginLabel(item),
-    vehicle: vehicle?.code || "",
-    km: Number(item.km || 0),
-    distance: data ? Number(data.distance || 0) : -Infinity,
-    liters: Number(item.liters || 0),
-    average: data ? Number(data.average || 0) : -Infinity,
-    status: consumptionStatus(item).label,
-    pump: Number(item.pump || 0),
-    user: user?.name || "",
-    observation: fuelingObservation(item),
-    photos: [item.vehiclePhoto, item.tachographPhoto, item.pumpPhoto].filter(Boolean).length,
-  };
-  return values[key] ?? "";
+  if (key === "distance") return data ? Number(data.distance || 0) : -Infinity;
+  if (key === "average") return data ? Number(data.average || 0) : -Infinity;
+  return "";
 }
 
 function sortFuelings(items) {
@@ -1115,14 +1186,18 @@ function renderFuelingForm() {
 }
 
 function renderFuelings() {
-  const rows = filteredFuelings();
+  const allRows = filteredFuelings();
+  const totalPages = Math.max(1, Math.ceil(allRows.length / FUELING_PAGE_SIZE));
+  fuelingsPage = Math.min(Math.max(1, fuelingsPage), totalPages);
+  const pageStart = (fuelingsPage - 1) * FUELING_PAGE_SIZE;
+  const rows = allRows.slice(pageStart, pageStart + FUELING_PAGE_SIZE);
   return `
     ${showFuelingForm ? renderFuelingForm() : ""}
     <section class="panel">
       <div class="panel-header">
         <div>
           <h2>Histórico</h2>
-          <p>${rows.length} registros encontrados.</p>
+          <p>${allRows.length} registros encontrados. Exibindo ${allRows.length ? pageStart + 1 : 0}-${Math.min(pageStart + FUELING_PAGE_SIZE, allRows.length)}.</p>
         </div>
         <div class="row-actions">
           <button class="button secondary" data-action="export">${icon("export")} Exportar</button>
@@ -1172,6 +1247,11 @@ function renderFuelings() {
         </tbody>
       </table>
     </section>
+    ${allRows.length > FUELING_PAGE_SIZE ? `<nav class="table-pagination" aria-label="Paginação do histórico">
+      <button class="button secondary" type="button" data-action="fuelings-page" data-page="${fuelingsPage - 1}" ${fuelingsPage === 1 ? "disabled" : ""}>Anterior</button>
+      <span>Página <strong>${fuelingsPage}</strong> de ${totalPages}</span>
+      <button class="button secondary" type="button" data-action="fuelings-page" data-page="${fuelingsPage + 1}" ${fuelingsPage === totalPages ? "disabled" : ""}>Próxima</button>
+    </nav>` : ""}
   `;
 }
 
@@ -2074,10 +2154,17 @@ function bindEvents() {
       key,
       direction: fuelingsSort.key === key && fuelingsSort.direction === "asc" ? "desc" : "asc",
     };
+    fuelingsPage = 1;
     render();
+  }));
+  document.querySelectorAll("[data-action='fuelings-page']").forEach((button) => button.addEventListener("click", () => {
+    fuelingsPage = Number(button.dataset.page) || 1;
+    render();
+    document.querySelector("[data-filter-box]")?.scrollIntoView({ block: "start" });
   }));
   document.querySelectorAll("[data-filter-box] input, [data-filter-box] select").forEach((input) => input.addEventListener("change", () => {
     filters[input.name] = input.value;
+    fuelingsPage = 1;
     render();
   }));
   document.querySelectorAll("[data-closing-filter] input, [data-closing-filter] select").forEach((input) => input.addEventListener("change", () => {

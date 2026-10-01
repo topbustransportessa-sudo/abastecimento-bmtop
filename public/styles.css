@@ -857,6 +857,19 @@ td {
   line-height: 1.2;
 }
 
+.table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px;
+}
+
+.table-pagination span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .photo-modal {
   width: min(100%, 720px);
 }
