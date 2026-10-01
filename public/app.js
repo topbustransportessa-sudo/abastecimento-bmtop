@@ -4,6 +4,7 @@ const DATA_KEY = "abastecimento-bmtop-data";
 const OFFLINE_DB = "abastecimento-bmtop-offline";
 const PUMP_COUNTER_LIMIT = 100000;
 const FUELING_PAGE_SIZE = 30;
+const OPERATIONAL_PUMPS = ["1", "5", "6"];
 
 const icons = {
   dashboard: "M3 13h8V3H3v10Zm10 8h8V3h-8v18ZM3 21h8v-6H3v6Z",
@@ -785,7 +786,7 @@ function tankCycleForClosing(closingCycle) {
     .sort((a, b) => a.score - b.score)[0]?.cycle || null;
 }
 
-const TOPBUS_AUDIT_PUMPS = ["1", "5", "6"];
+const TOPBUS_AUDIT_PUMPS = OPERATIONAL_PUMPS;
 
 function topbusClosingGroups() {
   const grouped = [];
@@ -1170,7 +1171,7 @@ function renderFuelingForm() {
         <div class="field"><label>Foto do tacógrafo</label><input name="tachographPhoto" type="file" accept="image/*" capture="environment" required></div>
         <div class="mobile-photo-preview hidden" data-photo-preview-for="tachographPhoto"></div>
         <div class="field full hidden" data-after-photo="tachographPhoto"><label>Km atual</label><input name="km" type="number" min="0" step="1" required disabled><div class="km-guidance" data-km-guidance></div></div>
-        <div class="field"><label>Bomba</label><select name="pump" required><option value="">Selecione</option>${pumpOptions()}</select></div>
+        <div class="field"><label>Bomba</label><select name="pump" required><option value="">Selecione</option>${operationalPumpOptions()}</select></div>
         <div class="field"><label>Foto do encerrante</label><input name="pumpPhoto" type="file" accept="image/*" capture="environment" required></div>
         <div class="mobile-photo-preview hidden" data-photo-preview-for="pumpPhoto"></div>
         <div class="field full hidden" data-after-photo="pumpPhoto"><label>Litros</label><input name="liters" type="number" min="0.01" step="0.01" required disabled></div>
@@ -1335,7 +1336,7 @@ function renderEditFuelingModal() {
         <div class="form-grid single">
           <div class="field"><label>Veículo</label><select name="vehicleId" required>${vehicleOptions(item.vehicleId)}</select></div>
           <div class="field"><label>Km atual</label><input name="km" type="number" min="0" step="1" value="${item.km}" required></div>
-          <div class="field"><label>Bomba</label><select name="pump" required>${pumpOptions(item.pump)}</select></div>
+          <div class="field"><label>Bomba</label><select name="pump" required>${operationalPumpOptions(item.pump)}</select></div>
           <div class="field"><label>Litros</label><input name="liters" type="number" min="0.01" step="0.01" value="${item.liters}" required></div>
           <div class="field"><label>Observação</label><textarea name="observation">${fuelingObservation(item)}</textarea></div>
           <div class="field"><label>Justificativa da alteração</label><textarea name="justification" required placeholder="Explique o motivo da correção"></textarea></div>
@@ -1367,7 +1368,7 @@ function renderEditClosingModal() {
         </div>
         <div class="form-grid single">
           <div class="field"><label>Data e hora</label><input name="createdAt" type="datetime-local" value="${localDateTimeInput(item.createdAt)}" required></div>
-          <div class="field"><label>Bomba</label><select name="pump" required>${pumpOptions(item.pump)}</select></div>
+          <div class="field"><label>Bomba</label><select name="pump" required>${operationalPumpOptions(item.pump)}</select></div>
           <div class="field"><label>Tipo de lançamento</label><select name="kind" required><option value="initial" ${kind !== "final" ? "selected" : ""}>Encerrante inicial</option><option value="final" ${kind === "final" ? "selected" : ""}>Encerrante final</option></select></div>
           <div class="field"><label>Valor do encerrante</label><input name="value" type="text" inputmode="decimal" placeholder="Ex.: 85119,70" value="${decimalInputValue(closingValue(item))}" required></div>
           <div class="field"><label>Foto atual</label>${item.photo ? `<a href="${item.photo}" target="_blank" rel="noopener">Ver foto atual</a>` : `<span class="status-line">Sem foto salva</span>`}</div>
@@ -1852,7 +1853,7 @@ function renderClosings() {
         </div>
         <div class="form-grid">
           <div class="field"><label>Data e hora</label>${admin ? `<input name="createdAt" type="datetime-local" value="${localDateTimeInput()}" required>` : `<input value="${formatDate(new Date().toISOString())}" readonly>`}</div>
-          <div class="field"><label>Bomba</label><select name="pump" required>${pumpOptions()}</select></div>
+          <div class="field"><label>Bomba</label><select name="pump" required>${operationalPumpOptions()}</select></div>
           <div class="field"><label>Tipo de lançamento</label><select name="kind" required><option value="initial">Encerrante inicial</option><option value="final">Encerrante final</option></select></div>
           <div class="field"><label>Valor do encerrante</label><input name="value" type="text" inputmode="decimal" placeholder="Ex.: 85119,70" required></div>
           <div class="field full"><label>Foto do encerrante</label><input name="photo" type="file" accept="image/*" capture="environment" required></div>
@@ -2031,6 +2032,14 @@ function vehicleBySearchLabel(label) {
 
 function pumpOptions(selected = "") {
   return ["1", "2", "3", "4", "5", "6"].map((item) => `<option value="${item}" ${selected === item ? "selected" : ""}>Bomba ${item}</option>`).join("");
+}
+
+function operationalPumpOptions(selected = "") {
+  const current = String(selected || "");
+  const legacyOption = current && !OPERATIONAL_PUMPS.includes(current) && /^[1-6]$/.test(current)
+    ? `<option value="${current}" selected hidden>Bomba ${current} (registro antigo)</option>`
+    : "";
+  return legacyOption + OPERATIONAL_PUMPS.map((item) => `<option value="${item}" ${current === item ? "selected" : ""}>Bomba ${item}</option>`).join("");
 }
 
 function bindEvents() {
