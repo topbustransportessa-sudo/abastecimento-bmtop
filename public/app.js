@@ -1,6 +1,7 @@
 const SESSION_KEY = "abastecimento-bmtop-session";
 const USER_KEY = "abastecimento-bmtop-user";
 const DATA_KEY = "abastecimento-bmtop-data";
+const DATA_USER_KEY = "abastecimento-bmtop-data-user";
 const OFFLINE_DB = "abastecimento-bmtop-offline";
 const PUMP_COUNTER_LIMIT = 100000;
 const FUELING_PAGE_SIZE = 30;
@@ -83,8 +84,12 @@ function loadState() {
 function saveState() {
   if (sessionToken) localStorage.setItem(SESSION_KEY, sessionToken);
   else localStorage.removeItem(SESSION_KEY);
-  if (currentUserId) localStorage.setItem(USER_KEY, currentUserId);
-  else localStorage.removeItem(USER_KEY);
+  if (currentUserId) {
+    localStorage.setItem(USER_KEY, currentUserId);
+    localStorage.setItem(DATA_USER_KEY, currentUserId);
+  } else {
+    localStorage.removeItem(USER_KEY);
+  }
   const cachedFuelings = (state.fuelings || [])
     .slice()
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -2351,21 +2356,45 @@ function bindFuelingPhotoFlow() {
 
 async function onLogin(event) {
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(event.currentTarget));
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type='submit']");
+  const data = Object.fromEntries(new FormData(form));
+  button.disabled = true;
+  button.innerHTML = `${icon("users")} Entrando...`;
   try {
     const payload = await apiRequest("/login", {
       method: "POST",
       body: JSON.stringify({ email: data.email, password: data.password }),
     });
     sessionToken = payload.token;
+    const cachedUserId = localStorage.getItem(DATA_USER_KEY);
+    if (cachedUserId !== payload.user.id) state = seedState();
     currentUserId = payload.user.id;
-    applyRemoteData(payload.data);
+    if (payload.data) applyRemoteData(payload.data);
+    else state.users = [payload.user, ...(state.users || []).filter((user) => user.id !== payload.user.id)];
     saveState();
     route = "dashboard";
+    initialDataRefreshing = !payload.data;
     render();
-    syncOfflineFuelings();
+    if (payload.data) {
+      syncOfflineFuelings();
+      return;
+    }
+
+    try {
+      await Promise.all([refreshData(), refreshOfflinePendingCount()]);
+      initialDataRefreshing = false;
+      render();
+      syncOfflineFuelings();
+    } catch (refreshError) {
+      initialDataRefreshing = false;
+      render();
+      toast("Login realizado. Não foi possível atualizar os dados agora; tente novamente em instantes.");
+    }
   } catch (error) {
     toast(error.message);
+    button.disabled = false;
+    button.innerHTML = `${icon("users")} Entrar`;
   }
 }
 

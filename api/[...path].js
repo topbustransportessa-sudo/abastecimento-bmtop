@@ -447,7 +447,7 @@ async function handle(req, res) {
     }
     const publicUser = { id: user.id, name: user.name, email: user.email, role: user.role, active: user.active };
     const token = sign({ id: user.id, exp: Date.now() + 1000 * 60 * 60 * 24 * 7 });
-    return send(res, 200, { token, user: publicUser, data: await getData() });
+    return send(res, 200, { token, user: publicUser });
   }
 
   const user = await requireUser(req);
