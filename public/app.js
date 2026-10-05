@@ -55,6 +55,7 @@ let fuelingSubmitting = false;
 let offlinePendingCount = 0;
 let offlineSyncing = false;
 let initialDataRefreshing = false;
+let historyDataLoading = false;
 let dieselReceivingData = { companies: [], tanks: [], arqueacao: [], tolerances: [], receipts: [], audits: [] };
 let dieselReceivingLoading = false;
 let dieselReceivingView = "launch";
@@ -126,6 +127,22 @@ function applyRemoteData(data) {
   invalidateFuelingIndexes();
 }
 
+function mergeRowsById(currentRows = [], olderRows = []) {
+  const rows = new Map();
+  [...currentRows, ...olderRows].forEach((item) => rows.set(item.id, item));
+  return [...rows.values()];
+}
+
+function mergeRemoteData(data) {
+  if (data.users?.length) state.users = data.users;
+  if (data.vehicles?.length) state.vehicles = data.vehicles;
+  state.fuelings = mergeRowsById(state.fuelings, data.fuelings);
+  state.pumpClosings = mergeRowsById(state.pumpClosings, data.pumpClosings);
+  state.fuelingAudits = mergeRowsById(state.fuelingAudits, data.fuelingAudits);
+  state.tankMeasurements = mergeRowsById(state.tankMeasurements, data.tankMeasurements);
+  invalidateFuelingIndexes();
+}
+
 async function apiRequest(path, options = {}) {
   let response;
   try {
@@ -150,11 +167,26 @@ async function apiRequest(path, options = {}) {
   return data;
 }
 
-async function refreshData() {
-  const payload = await apiRequest("/data");
+async function refreshRecentData() {
+  const payload = await apiRequest("/data/recent");
   currentUserId = payload.user.id;
   applyRemoteData(payload.data);
   saveState();
+}
+
+async function loadHistoryInBackground() {
+  if (historyDataLoading || !sessionToken || !navigator.onLine) return;
+  historyDataLoading = true;
+  try {
+    const payload = await apiRequest("/data/history");
+    mergeRemoteData(payload.data);
+    saveState();
+  } catch (error) {
+    console.error("Não foi possível carregar o histórico completo.", error);
+  } finally {
+    historyDataLoading = false;
+    if (currentUser()) render();
+  }
 }
 
 function offlineDb() {
@@ -280,10 +312,13 @@ async function init() {
 
   const offlineCountPromise = refreshOfflinePendingCount();
   try {
-    await Promise.all([refreshData(), offlineCountPromise]);
+    await Promise.all([refreshRecentData(), offlineCountPromise]);
     initialDataRefreshing = false;
+    historyDataLoading = true;
     render();
     syncOfflineFuelings();
+    historyDataLoading = false;
+    loadHistoryInBackground();
   } catch (error) {
     initialDataRefreshing = false;
     if (error.status === 401) {
@@ -988,6 +1023,7 @@ function render() {
 
 function renderOfflineStatus() {
   if (initialDataRefreshing) return `<span class="sync-status info">Atualizando...</span>`;
+  if (historyDataLoading) return `<span class="sync-status info">Carregando histórico...</span>`;
   if (offlineSyncing) return `<span class="sync-status info">Sincronizando...</span>`;
   if (offlinePendingCount) return `<button class="sync-status warn" data-action="sync-offline">${offlinePendingCount} pendente(s)</button>`;
   if (!navigator.onLine) return `<span class="sync-status bad">Offline</span>`;
@@ -2382,10 +2418,13 @@ async function onLogin(event) {
     }
 
     try {
-      await Promise.all([refreshData(), refreshOfflinePendingCount()]);
+      await Promise.all([refreshRecentData(), refreshOfflinePendingCount()]);
       initialDataRefreshing = false;
+      historyDataLoading = true;
       render();
       syncOfflineFuelings();
+      historyDataLoading = false;
+      loadHistoryInBackground();
     } catch (refreshError) {
       initialDataRefreshing = false;
       render();

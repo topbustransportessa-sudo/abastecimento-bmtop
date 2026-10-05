@@ -243,14 +243,23 @@ function mapTankMeasurement(row) {
   };
 }
 
-async function getData() {
+async function getData(period = "all") {
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const cutoffIso = cutoff.toISOString();
+  const cutoffDate = cutoffIso.slice(0, 10);
+  const recent = period === "recent";
+  const history = period === "history";
+  const fuelingPeriod = recent ? `&created_at=gte.${cutoffIso}` : history ? `&created_at=lt.${cutoffIso}` : "";
+  const closingPeriod = recent ? `&date=gte.${cutoffDate}` : history ? `&date=lt.${cutoffDate}` : "";
+  const auditPeriod = recent ? `&changed_at=gte.${cutoffIso}` : history ? `&changed_at=lt.${cutoffIso}` : "";
+  const measurementPeriod = recent ? `&measured_at=gte.${cutoffIso}` : history ? `&measured_at=lt.${cutoffIso}` : "";
   const [users, vehicles, fuelings, pumpClosings, audits, tankMeasurements] = await Promise.all([
-    supabase("app_users?select=id,name,email,role,active,created_at&order=name.asc"),
-    supabase("vehicles?select=id,code,plate,min_avg,max_avg,active&order=code.asc"),
-    supabaseAll("fuelings?select=id,created_at,vehicle_id,vehicle_photo_url,tachograph_photo_url,pump,pump_photo_url,km,liters,observation,user_id,source,offline_created_at,synced_at&order=created_at.desc"),
-    supabaseAll("pump_closings?select=id,date,pump,initial,final,photo_url,created_at,user_id&order=date.desc,created_at.desc"),
-    supabaseAll("fueling_audits?select=id,fueling_id,changed_at,changed_by,justification,changes&order=changed_at.desc").catch(() => []),
-    supabaseAll("tank_measurements?select=id,created_at,measured_at,company,tank_id,pump,kind,measure_mm,liters,photo_url,user_id&order=measured_at.desc").catch(() => []),
+    history ? Promise.resolve([]) : supabase("app_users?select=id,name,email,role,active,created_at&order=name.asc"),
+    history ? Promise.resolve([]) : supabase("vehicles?select=id,code,plate,min_avg,max_avg,active&order=code.asc"),
+    supabaseAll(`fuelings?select=*${fuelingPeriod}&order=created_at.desc`),
+    supabaseAll(`pump_closings?select=id,date,pump,initial,final,photo_url,created_at,user_id${closingPeriod}&order=date.desc,created_at.desc`),
+    supabaseAll(`fueling_audits?select=id,fueling_id,changed_at,changed_by,justification,changes${auditPeriod}&order=changed_at.desc`).catch(() => []),
+    supabaseAll(`tank_measurements?select=id,created_at,measured_at,company,tank_id,pump,kind,measure_mm,liters,photo_url,user_id${measurementPeriod}&order=measured_at.desc`).catch(() => []),
   ]);
   return {
     users,
@@ -452,6 +461,8 @@ async function handle(req, res) {
 
   const user = await requireUser(req);
   if (req.method === "GET" && route === "/data") return send(res, 200, { user, data: await getData() });
+  if (req.method === "GET" && route === "/data/recent") return send(res, 200, { user, data: await getData("recent") });
+  if (req.method === "GET" && route === "/data/history") return send(res, 200, { user, data: await getData("history") });
 
   if (req.method === "POST" && route === "/me/password") {
     const body = await readBody(req);
