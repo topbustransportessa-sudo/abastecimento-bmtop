@@ -928,6 +928,36 @@ function renderAuditPumpRows(group) {
   }).join("");
 }
 
+function renderAuditDispersionDashboard(rows) {
+  const summaries = TOPBUS_AUDIT_PUMPS.map((pump) => {
+    const cycles = rows.map((group) => group.byPump[pump]).filter(Boolean);
+    const completeCycles = cycles.filter((cycle) => cycle.final);
+    const dispersion = completeCycles.reduce((sum, cycle) => sum + (cycle.measured - cycle.launched), 0);
+    const fuelings = completeCycles.reduce((sum, cycle) => sum + (cycle.fuels?.length || 0), 0);
+    return { pump, cycles: completeCycles.length, dispersion, fuelings };
+  });
+  const total = summaries.reduce((acc, item) => ({
+    cycles: acc.cycles + item.cycles,
+    dispersion: acc.dispersion + item.dispersion,
+    fuelings: acc.fuelings + item.fuelings,
+  }), { cycles: 0, dispersion: 0, fuelings: 0 });
+  const cards = [
+    ...summaries.map((item) => ({ label: `Bomba ${item.pump}`, ...item })),
+    { label: "Total", ...total, total: true },
+  ];
+  return `<div class="audit-summary" aria-label="Dispersão acumulada filtrada">
+    ${cards.map((item) => {
+      const ok = Math.abs(item.dispersion) <= item.cycles;
+      const state = item.cycles ? (ok ? "ok" : "bad") : "info";
+      return `<article class="audit-summary-card ${item.total ? "total" : ""}">
+        <span>${item.label}</span>
+        <strong class="${state}">${formatNumber(item.dispersion)} L</strong>
+        <small>${item.cycles} ciclo(s) finalizado(s) · ${item.fuelings} abastec.</small>
+      </article>`;
+    }).join("")}
+  </div>`;
+}
+
 function tankMeasurementPhotoButton(item, suffix = "") {
   if (!item) return "-";
   const label = `${formatNumber(item.measureMm)} mm / ${formatNumber(item.liters)} L${suffix}`;
@@ -1746,7 +1776,7 @@ function renderAudit() {
   if (!tankMeasurementConfigLoaded && !tankMeasurementConfigLoading) ensureTankMeasurementConfig().then(() => route === "audit" && render());
   const rows = filteredAuditCycles();
   return `
-    <section class="panel"><div class="panel-header"><div><h2>Conciliação Topbus por período</h2><p>${rows.length} ciclo(s). Soma das bombas 1, 5 e 6. Tolerâncias: encerrante x abastecimentos ±1 L; encerrante x medição tanque ±30 L.</p><small class="audit-help">A linha destacada mostra o total do turno. Nas linhas de cada bomba, clique em "Ver fotos" para conferir a bomba registrada nas imagens.</small></div></div>${renderAuditFilters()}</section>
+    <section class="panel"><div class="panel-header"><div><h2>Conciliação Topbus por período</h2><p>${rows.length} ciclo(s). Soma das bombas 1, 5 e 6. Tolerâncias: encerrante x abastecimentos ±1 L; encerrante x medição tanque ±30 L.</p><small class="audit-help">A linha destacada mostra o total do turno. Nas linhas de cada bomba, clique em "Ver fotos" para conferir a bomba registrada nas imagens.</small></div></div>${renderAuditFilters()}${renderAuditDispersionDashboard(rows)}</section>
     <section class="table-wrap audit-table"><table><thead><tr><th>Início</th><th>Fim</th><th>Bomba</th><th>Tanque</th><th>Enc. inicial</th><th>Enc. final</th><th>Tanque inicial</th><th>Tanque final</th><th>Litragem encerrante</th><th>Litragem medição tanque</th><th>Soma abastecimentos</th><th>Dispersão abastec.</th><th>Dispersão tanque</th><th>Abastecimentos</th><th>Status</th></tr></thead><tbody>
       ${rows.map((item) => {
         const metrics = auditCycleMetrics(item);
