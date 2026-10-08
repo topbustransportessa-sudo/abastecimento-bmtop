@@ -46,7 +46,10 @@ create table if not exists public.pump_closings (
   final numeric(14, 2) not null,
   photo_url text,
   created_at timestamptz not null default now(),
-  user_id uuid not null references public.app_users(id)
+  user_id uuid not null references public.app_users(id),
+  deleted_at timestamptz,
+  deleted_by uuid references public.app_users(id),
+  delete_reason text
 );
 
 create table if not exists public.fueling_audits (
@@ -63,6 +66,7 @@ create index if not exists fuelings_vehicle_id_idx on public.fuelings (vehicle_i
 create index if not exists fueling_audits_fueling_id_idx on public.fueling_audits (fueling_id);
 create index if not exists fueling_audits_changed_at_idx on public.fueling_audits (changed_at desc);
 create index if not exists pump_closings_date_idx on public.pump_closings (date desc);
+create index if not exists pump_closings_deleted_at_idx on public.pump_closings (deleted_at);
 
 alter table public.app_users enable row level security;
 alter table public.vehicles enable row level security;

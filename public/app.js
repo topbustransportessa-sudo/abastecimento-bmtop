@@ -42,6 +42,7 @@ let sidebarOpen = false;
 let showFuelingForm = false;
 let detailFuelingId = "";
 let deleteTargetId = "";
+let deleteClosingId = "";
 let editFuelingId = "";
 let editClosingId = "";
 let closingPhotoPreview = null;
@@ -141,6 +142,10 @@ function mergeRemoteData(data) {
   state.fuelingAudits = mergeRowsById(state.fuelingAudits, data.fuelingAudits);
   state.tankMeasurements = mergeRowsById(state.tankMeasurements, data.tankMeasurements);
   invalidateFuelingIndexes();
+}
+
+function activePumpClosings() {
+  return (state.pumpClosings || []).filter((item) => !item.deletedAt);
 }
 
 async function apiRequest(path, options = {}) {
@@ -558,6 +563,11 @@ function closingKindLabel(item) {
   return labels[closingKind(item)];
 }
 
+function closingStatusCell(item) {
+  if (!item.deletedAt) return `<span class="badge ok">Ativo</span>`;
+  return `<span class="badge bad">Excluído</span><small class="table-note">Por ${userById(item.deletedBy)?.name || "-"} em ${formatDate(item.deletedAt)}${item.deleteReason ? ` - ${item.deleteReason}` : ""}</small>`;
+}
+
 function closingTime(item) {
   if (!item) return 0;
   const time = new Date(item.createdAt || item.date).getTime();
@@ -571,7 +581,7 @@ function lastItem(items) {
 function closingDuplicateCandidate(pump, kind, createdAt, ignoreId = "") {
   const time = new Date(createdAt).getTime();
   if (!Number.isFinite(time)) return null;
-  const items = state.pumpClosings
+  const items = activePumpClosings()
     .filter((item) => item.pump === pump && item.id !== ignoreId)
     .sort((a, b) => closingTime(a) - closingTime(b));
   if (kind === "initial") {
@@ -666,7 +676,7 @@ function buildPendingFinalCycle(pump, initial) {
 function closingCycles() {
   const cycles = [];
   ["1", "2", "3", "4", "5", "6"].forEach((pump) => {
-    const items = state.pumpClosings
+    const items = activePumpClosings()
       .filter((item) => item.pump === pump)
       .sort((a, b) => closingTime(a) - closingTime(b));
     let initial = null;
@@ -715,7 +725,7 @@ function pumpDiff(date = today(), pump = "") {
       measured: total.measured + cycle.measured,
       launched: total.launched + cycle.launched,
       diff: total.diff + cycle.diff,
-      closings: total.closings + state.pumpClosings.filter((item) => item.pump === groupPump).length,
+      closings: total.closings + activePumpClosings().filter((item) => item.pump === groupPump).length,
       fuels: total.fuels + cycle.fuels.length,
     };
   }, { measured: 0, launched: 0, diff: 0, closings: 0, fuels: 0 });
@@ -1040,6 +1050,7 @@ function render() {
       ${renderFuelingDetails()}
       ${renderEditFuelingModal()}
       ${renderEditClosingModal()}
+      ${renderDeleteClosingModal()}
       ${renderClosingPhotoModal()}
       ${renderTankMeasurementPhotoModal()}
       ${renderAuditFuelingsModal()}
@@ -1449,7 +1460,7 @@ function renderEditFuelingModal() {
 function renderEditClosingModal() {
   if (!editClosingId) return "";
   const item = state.pumpClosings.find((closing) => closing.id === editClosingId);
-  if (!item) return "";
+  if (!item || item.deletedAt) return "";
   const kind = closingKind(item);
   return `
     <div class="modal-backdrop" role="dialog" aria-modal="true">
@@ -1473,6 +1484,31 @@ function renderEditClosingModal() {
         <div class="actions" style="margin-top:14px">
           <button class="button" type="submit">${icon("save")} Salvar alteração</button>
           <button class="button secondary" type="button" data-action="cancel-edit-closing">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function renderDeleteClosingModal() {
+  if (!deleteClosingId) return "";
+  const item = state.pumpClosings.find((closing) => closing.id === deleteClosingId);
+  if (!item || item.deletedAt) return "";
+  return `
+    <div class="modal-backdrop" role="dialog" aria-modal="true">
+      <form class="modal compact" data-form="delete-closing">
+        <div class="panel-header">
+          <div>
+            <h2>Excluir encerrante</h2>
+            <p>O lançamento será mantido no histórico como excluído.</p>
+          </div>
+          <button class="icon-btn" type="button" data-action="cancel-delete-closing" title="Fechar">${icon("close")}</button>
+        </div>
+        <p class="status-line">Bomba ${item.pump}, ${closingKindLabel(item).toLowerCase()}, ${formatNumber(closingValue(item))} em ${formatDate(item.createdAt)}.</p>
+        <div class="field"><label>Motivo da exclusão</label><textarea name="reason" required placeholder="Explique por que este encerrante deve ser excluído"></textarea></div>
+        <div class="actions" style="margin-top:14px">
+          <button class="button danger" type="submit">${icon("trash")} Confirmar exclusão</button>
+          <button class="button secondary" type="button" data-action="cancel-delete-closing">Cancelar</button>
         </div>
       </form>
     </div>
@@ -1967,8 +2003,8 @@ function renderClosings() {
     </section>
     <section class="table-wrap mobile-card-table">
       <table>
-        <thead><tr><th>Data</th><th>Hora</th><th>Bomba</th><th>Tipo</th><th>Valor</th><th>Foto</th><th>Usuário</th><th>Ações</th></tr></thead>
-        <tbody>${state.pumpClosings.slice().sort((a,b) => closingTime(b) - closingTime(a)).map((item) => `<tr>
+        <thead><tr><th>Data</th><th>Hora</th><th>Bomba</th><th>Tipo</th><th>Valor</th><th>Foto</th><th>Usuário</th><th>Status</th><th>Ações</th></tr></thead>
+        <tbody>${state.pumpClosings.slice().sort((a,b) => closingTime(b) - closingTime(a)).map((item) => `<tr class="${item.deletedAt ? "deleted-row" : ""}">
           <td data-label="Data">${item.date.split("-").reverse().join("/")}</td>
           <td data-label="Hora">${formatDate(item.createdAt).split(", ")[1] || "-"}</td>
           <td data-label="Bomba">${item.pump}</td>
@@ -1976,8 +2012,9 @@ function renderClosings() {
           <td data-label="Valor">${formatNumber(closingValue(item))}</td>
           <td data-label="Foto">${item.photo ? `<a href="${item.photo}" target="_blank" rel="noopener">Ver foto</a>` : "-"}</td>
           <td data-label="Usuário">${userById(item.userId)?.name || "-"}</td>
-          <td data-label="Ações">${admin ? `<button class="icon-btn" data-action="edit-closing" data-id="${item.id}" title="Editar">${icon("edit")}</button>` : "-"}</td>
-        </tr>`).join("") || `<tr class="mobile-table-empty"><td colspan="8">Nenhum encerrante lançado.</td></tr>`}</tbody>
+          <td data-label="Status">${closingStatusCell(item)}</td>
+          <td data-label="Ações">${admin && !item.deletedAt ? `<div class="row-actions"><button class="icon-btn" data-action="edit-closing" data-id="${item.id}" title="Editar">${icon("edit")}</button><button class="icon-btn danger" data-action="request-delete-closing" data-id="${item.id}" title="Excluir">${icon("trash")}</button></div>` : "-"}</td>
+        </tr>`).join("") || `<tr class="mobile-table-empty"><td colspan="9">Nenhum encerrante lançado.</td></tr>`}</tbody>
       </table>
     </section>
   `;
@@ -2206,10 +2243,20 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-action='edit-closing']").forEach((button) => button.addEventListener("click", () => {
     editClosingId = button.dataset.id;
+    deleteClosingId = "";
     render();
   }));
   document.querySelectorAll("[data-action='cancel-edit-closing']").forEach((button) => button.addEventListener("click", () => {
     editClosingId = "";
+    render();
+  }));
+  document.querySelectorAll("[data-action='request-delete-closing']").forEach((button) => button.addEventListener("click", () => {
+    deleteClosingId = button.dataset.id;
+    editClosingId = "";
+    render();
+  }));
+  document.querySelectorAll("[data-action='cancel-delete-closing']").forEach((button) => button.addEventListener("click", () => {
+    deleteClosingId = "";
     render();
   }));
   document.querySelectorAll("[data-action='view-closing-photo']").forEach((button) => button.addEventListener("click", () => {
@@ -2292,6 +2339,7 @@ function bindEvents() {
   document.querySelector("[data-form='user']")?.addEventListener("submit", onUser);
   document.querySelector("[data-form='closing']")?.addEventListener("submit", onClosing);
   document.querySelector("[data-form='edit-closing']")?.addEventListener("submit", onEditClosing);
+  document.querySelector("[data-form='delete-closing']")?.addEventListener("submit", onDeleteClosing);
   const tankMeasurementForm = document.querySelector("[data-form='tank-measurement']");
   tankMeasurementForm?.addEventListener("submit", onTankMeasurement);
   tankMeasurementForm?.addEventListener("input", updateTankMeasurementPreview);
@@ -2988,6 +3036,35 @@ async function onEditClosing(event) {
     editClosingId = "";
     const cycle = latestClosingCycle(data.pump);
     toast(cycle.status === "divergent" ? `Encerrante alterado com alerta: diferença de ${formatNumber(cycle.diff)} litros.` : `Encerrante alterado.${cycle.rolledOver ? " Virada em 100.000,00 considerada." : ""}`);
+    render();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function onDeleteClosing(event) {
+  event.preventDefault();
+  if (currentUser()?.role !== "admin") {
+    toast("Apenas administradores podem excluir encerrantes.");
+    return;
+  }
+  const id = deleteClosingId;
+  const existing = state.pumpClosings.find((item) => item.id === id);
+  if (!id || !existing) return;
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  const reason = String(data.reason || "").trim();
+  if (!reason) {
+    toast("Informe o motivo da exclusão.");
+    return;
+  }
+  try {
+    const payload = await apiRequest(`/closings/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ reason }),
+    });
+    state.pumpClosings = state.pumpClosings.map((item) => item.id === id ? payload.closing : item);
+    deleteClosingId = "";
+    toast("Encerrante excluído e mantido no histórico.");
     render();
   } catch (error) {
     toast(error.message);

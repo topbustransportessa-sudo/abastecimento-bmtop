@@ -693,6 +693,16 @@ td {
   font-size: 0.92rem;
 }
 
+.deleted-row td {
+  background: #fff7f6;
+  color: #7a4b47;
+}
+
+.deleted-row td:not(:last-child) {
+  text-decoration: line-through;
+  text-decoration-color: rgba(198, 61, 51, 0.45);
+}
+
 .badge {
   display: inline-flex;
   align-items: center;

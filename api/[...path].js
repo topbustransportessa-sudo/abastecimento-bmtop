@@ -138,6 +138,9 @@ function mapClosing(row) {
     photo: row.photo_url || "",
     createdAt: row.created_at,
     userId: row.user_id,
+    deletedAt: row.deleted_at || "",
+    deletedBy: row.deleted_by || "",
+    deleteReason: row.delete_reason || "",
   };
 }
 
@@ -253,11 +256,18 @@ async function getData(period = "all") {
   const closingPeriod = recent ? `&date=gte.${cutoffDate}` : history ? `&date=lt.${cutoffDate}` : "";
   const auditPeriod = recent ? `&changed_at=gte.${cutoffIso}` : history ? `&changed_at=lt.${cutoffIso}` : "";
   const measurementPeriod = recent ? `&measured_at=gte.${cutoffIso}` : history ? `&measured_at=lt.${cutoffIso}` : "";
+  const closingSelect = "id,date,pump,initial,final,photo_url,created_at,user_id,deleted_at,deleted_by,delete_reason";
+  const closingQuery = `pump_closings?select=${closingSelect}${closingPeriod}&order=date.desc,created_at.desc`;
+  const legacyClosingQuery = `pump_closings?select=id,date,pump,initial,final,photo_url,created_at,user_id${closingPeriod}&order=date.desc,created_at.desc`;
   const [users, vehicles, fuelings, pumpClosings, audits, tankMeasurements] = await Promise.all([
     history ? Promise.resolve([]) : supabase("app_users?select=id,name,email,role,active,created_at&order=name.asc"),
     history ? Promise.resolve([]) : supabase("vehicles?select=id,code,plate,min_avg,max_avg,active&order=code.asc"),
     supabaseAll(`fuelings?select=*${fuelingPeriod}&order=created_at.desc`),
-    supabaseAll(`pump_closings?select=id,date,pump,initial,final,photo_url,created_at,user_id${closingPeriod}&order=date.desc,created_at.desc`),
+    supabaseAll(closingQuery).catch((error) => {
+      const message = `${error.message || ""} ${JSON.stringify(error.details || {})}`;
+      if (!/deleted_at|deleted_by|delete_reason|schema cache/i.test(message)) throw error;
+      return supabaseAll(legacyClosingQuery);
+    }),
     supabaseAll(`fueling_audits?select=id,fueling_id,changed_at,changed_by,justification,changes${auditPeriod}&order=changed_at.desc`).catch(() => []),
     supabaseAll(`tank_measurements?select=id,created_at,measured_at,company,tank_id,pump,kind,measure_mm,liters,photo_url,user_id${measurementPeriod}&order=measured_at.desc`).catch(() => []),
   ]);
@@ -583,6 +593,7 @@ async function handle(req, res) {
       const existingRows = await supabase(`pump_closings?id=eq.${encodeURIComponent(body.replaceId)}&select=*`);
       const existing = existingRows[0];
       if (!existing) return send(res, 404, { error: "Encerrante para substituicao nao encontrado." });
+      if (existing.deleted_at) return send(res, 400, { error: "Nao e possivel substituir um encerrante excluido." });
       if (existing.pump !== body.pump || pumpClosingKind(existing) !== body.kind) {
         return send(res, 400, { error: "O encerrante selecionado nao corresponde a mesma bomba e tipo." });
       }
@@ -607,6 +618,7 @@ async function handle(req, res) {
     const existingRows = await supabase(`pump_closings?id=eq.${encodeURIComponent(closingId)}&select=*`);
     const existing = existingRows[0];
     if (!existing) return send(res, 404, { error: "Encerrante nao encontrado." });
+    if (existing.deleted_at) return send(res, 400, { error: "Nao e possivel editar um encerrante excluido." });
 
     const createdAt = body.createdAt ? new Date(body.createdAt) : new Date(existing.created_at);
     if (Number.isNaN(createdAt.getTime())) return send(res, 400, { error: "Data e hora do encerrante invalidas." });
@@ -633,6 +645,33 @@ async function handle(req, res) {
       body: JSON.stringify(update),
     });
     return send(res, 200, { closing: mapClosing(rows[0]) });
+  }
+
+  if (req.method === "DELETE" && closingMatch) {
+    requireAdmin(user);
+    const closingId = decodeURIComponent(closingMatch[1]);
+    const body = await readBody(req);
+    const reason = String(body.reason || "").trim();
+    if (!reason) return send(res, 400, { error: "Informe o motivo da exclusao." });
+
+    const existingRows = await supabase(`pump_closings?id=eq.${encodeURIComponent(closingId)}&select=*`);
+    const existing = existingRows[0];
+    if (!existing) return send(res, 404, { error: "Encerrante nao encontrado." });
+    if (existing.deleted_at) return send(res, 400, { error: "Este encerrante ja esta excluido." });
+
+    try {
+      const rows = await supabase(`pump_closings?id=eq.${encodeURIComponent(closingId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ deleted_at: new Date().toISOString(), deleted_by: user.id, delete_reason: reason }),
+      });
+      return send(res, 200, { closing: mapClosing(rows[0]) });
+    } catch (error) {
+      const message = `${error.message || ""} ${JSON.stringify(error.details || {})}`;
+      if (/deleted_at|deleted_by|delete_reason|schema cache/i.test(message)) {
+        return send(res, 500, { error: "O banco ainda nao tem as colunas de historico de exclusao. Aplique a migracao de encerrantes e tente novamente." });
+      }
+      throw error;
+    }
   }
 
   if (req.method === "POST" && route === "/fuelings") {
