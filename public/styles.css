@@ -930,6 +930,35 @@ td {
   padding: 0;
 }
 
+.closing-reading {
+  display: inline-grid;
+  gap: 1px;
+  line-height: 1.05;
+  vertical-align: top;
+}
+
+.closing-reading.table-link {
+  text-align: left;
+  text-decoration: none;
+}
+
+.closing-value {
+  font-weight: 800;
+  text-decoration: underline;
+}
+
+.closing-user {
+  max-width: 74px;
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  overflow: hidden;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .table-note {
   display: block;
   margin-top: 3px;

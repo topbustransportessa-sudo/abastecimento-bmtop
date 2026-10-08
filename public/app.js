@@ -574,6 +574,19 @@ function closingTime(item) {
   return Number.isFinite(time) ? time : 0;
 }
 
+function operationalShiftStart(time) {
+  const date = new Date(time);
+  if (!Number.isFinite(date.getTime())) return null;
+  if (date.getHours() < 7) date.setDate(date.getDate() - 1);
+  date.setHours(7, 0, 0, 0);
+  return date.getTime();
+}
+
+function operationalShiftEnd(time) {
+  const start = operationalShiftStart(time);
+  return start === null ? null : start + (24 * 60 * 60 * 1000) - 1;
+}
+
 function lastItem(items) {
   return items.length ? items[items.length - 1] : null;
 }
@@ -632,10 +645,7 @@ function closingFuelsInPeriod(pump, start, end) {
 }
 
 function pendingFinalEndTime(initial) {
-  const end = new Date(closingTime(initial));
-  end.setDate(end.getDate() + 1);
-  end.setHours(2, 30, 0, 0);
-  return end.getTime();
+  return operationalShiftEnd(closingTime(initial));
 }
 
 function buildClosingCycle(pump, initial, final) {
@@ -669,7 +679,7 @@ function buildPendingFinalCycle(pump, initial) {
     start,
     end,
     pendingReason: "Sem final",
-    launchedNote: "Soma até 02:30 por falta do encerrante final.",
+    launchedNote: "Soma até 06:59 por falta do encerrante final.",
   };
 }
 
@@ -748,8 +758,10 @@ function photoLink(value, label) {
 function closingPhotoButton(item, value) {
   if (!item) return "-";
   const formatted = formatNumber(value);
-  if (!item.photo) return formatted;
-  return `<button class="table-link" data-action="view-closing-photo" data-id="${item.id}" type="button">${formatted}</button>`;
+  const user = userById(item.userId)?.name || "-";
+  const content = `<span class="closing-value">${formatted}</span><small class="closing-user">${user}</small>`;
+  if (!item.photo) return `<span class="closing-reading">${content}</span>`;
+  return `<button class="table-link closing-reading" data-action="view-closing-photo" data-id="${item.id}" type="button">${content}</button>`;
 }
 
 function renderClosingPhotoModal() {
@@ -853,13 +865,14 @@ function topbusClosingGroups() {
     .sort((a, b) => (a.start || a.end || 0) - (b.start || b.end || 0))
     .forEach((cycle) => {
       const time = cycle.start || cycle.end || 0;
+      const shiftStart = operationalShiftStart(time);
       const target = grouped
-        .filter((group) => !group.cycles.some((item) => item.pump === cycle.pump))
+        .filter((group) => group.shiftStart === shiftStart && !group.cycles.some((item) => item.pump === cycle.pump))
         .map((group) => ({ group, gap: Math.abs(group.anchor - time) }))
         .filter((item) => item.gap <= 4 * 60 * 60 * 1000)
         .sort((a, b) => a.gap - b.gap)[0]?.group;
       if (target) target.cycles.push(cycle);
-      else grouped.push({ anchor: time, cycles: [cycle] });
+      else grouped.push({ anchor: time, shiftStart, cycles: [cycle] });
     });
 
   return grouped.map((group) => {
@@ -872,6 +885,8 @@ function topbusClosingGroups() {
       pump: "topbus",
       cycles: group.cycles,
       byPump,
+      shiftStart: group.shiftStart,
+      shiftEnd: operationalShiftEnd(group.shiftStart),
       initial: allInitial,
       final: allFinal,
       start: starts.length ? Math.min(...starts) : null,
@@ -880,9 +895,9 @@ function topbusClosingGroups() {
       launched: group.cycles.reduce((sum, cycle) => sum + Number(cycle.launched || 0), 0),
       fuels: group.cycles.flatMap((cycle) => cycle.fuels || []),
       rolledOver: group.cycles.some((cycle) => cycle.rolledOver),
-      launchedNote: group.cycles.some((cycle) => cycle.launchedNote) ? "Inclui soma até 02:30 para bomba sem encerrante final." : "",
+      launchedNote: group.cycles.some((cycle) => cycle.launchedNote) ? "Inclui soma até 06:59 para bomba sem encerrante final." : "",
     };
-  }).sort((a, b) => (b.end || b.start || 0) - (a.end || a.start || 0));
+  }).sort((a, b) => (b.shiftStart || 0) - (a.shiftStart || 0) || (b.end || b.start || 0) - (a.end || a.start || 0));
 }
 
 function auditCycleMetrics(closingCycle) {
@@ -901,8 +916,8 @@ function filteredAuditCycles() {
   const fromTime = closingFilters.from ? new Date(closingFilters.from).getTime() : null;
   const toTime = closingFilters.to ? new Date(closingFilters.to).getTime() : null;
   return topbusClosingGroups().filter((item) => {
-    const start = item.start || item.end || closingTime(item.initial) || closingTime(item.final);
-    const end = item.end || item.start || start;
+    const start = item.shiftStart || item.start || item.end || closingTime(item.initial) || closingTime(item.final);
+    const end = item.shiftEnd || item.end || item.start || start;
     return (!fromTime || end >= fromTime)
       && (!toTime || start <= toTime)
       && (!closingFilters.status || auditCycleMetrics(item).status === closingFilters.status);
