@@ -399,6 +399,7 @@ function formatAuditValue(change, value) {
     const vehicle = vehicleById(value);
     return vehicle ? `${vehicle.code} - ${vehicle.plate}` : value;
   }
+  if (change.field === "createdAt") return formatDate(value);
   if (change.field === "km") return moneyless(value);
   if (change.field === "liters") return formatNumber(value);
   return String(value);
@@ -1276,16 +1277,17 @@ function renderFilters() {
 }
 
 function renderFuelingForm() {
+  const admin = currentUser()?.role === "admin";
   return `
     <form class="panel" data-form="fueling">
       <div class="panel-header">
         <div>
           <h2>Lançamento de abastecimento</h2>
-          <p>A data e hora são registradas automaticamente pelo sistema.</p>
+          <p>${admin ? "Administrador pode informar data e hora do abastecimento." : "A data e hora são registradas automaticamente pelo sistema."}</p>
         </div>
       </div>
       <div class="form-grid">
-        <div class="field"><label>Data e hora</label><input value="${formatDate(new Date().toISOString())}" readonly></div>
+        <div class="field"><label>Data e hora</label>${admin ? `<input name="createdAt" type="datetime-local" value="${localDateTimeInput()}" required>` : `<input value="${formatDate(new Date().toISOString())}" readonly>`}</div>
         <div class="field vehicle-combobox"><label>Veículo</label><input data-vehicle-search type="search" placeholder="Digite prefixo, placa ou descrição" autocomplete="off" required><input name="vehicleId" type="hidden"><div class="vehicle-suggestions hidden" data-vehicle-suggestions></div></div>
         <div class="field"><label>Foto do carro</label><input name="vehiclePhoto" type="file" accept="image/*" capture="environment" required></div>
         <div class="mobile-photo-preview hidden" data-photo-preview-for="vehiclePhoto"></div>
@@ -1455,6 +1457,7 @@ function renderEditFuelingModal() {
           <button class="icon-btn" type="button" data-action="cancel-edit-fueling" title="Fechar">${icon("close")}</button>
         </div>
         <div class="form-grid single">
+          <div class="field"><label>Data e hora</label><input name="createdAt" type="datetime-local" value="${localDateTimeInput(item.createdAt)}" required></div>
           <div class="field"><label>Veículo</label><select name="vehicleId" required>${vehicleOptions(item.vehicleId)}</select></div>
           <div class="field"><label>Km atual</label><input name="km" type="number" min="0" step="1" value="${item.km}" required></div>
           <div class="field"><label>Bomba</label><select name="pump" required>${operationalPumpOptions(item.pump)}</select></div>
@@ -2585,10 +2588,16 @@ async function fileToDataUrl(file) {
 async function onFueling(event) {
   event.preventDefault();
   if (fuelingSubmitting) return;
+  const isAdmin = currentUser()?.role === "admin";
   const form = event.currentTarget;
   const submitButton = form.querySelector("button[type='submit']");
   const data = Object.fromEntries(new FormData(form));
   if (!form.reportValidity()) return;
+  const createdAt = isAdmin && data.createdAt ? new Date(data.createdAt).toISOString() : "";
+  if (isAdmin && !Number.isFinite(new Date(createdAt).getTime())) {
+    toast("Informe uma data e hora válida para o abastecimento.");
+    return;
+  }
   const lastFueling = latestFuelingForVehicle(data.vehicleId);
   if (lastFueling && Number(data.km) < Number(lastFueling.km)) {
     const confirmed = window.confirm(`O km informado (${moneyless(data.km)}) é menor que o último km lançado para este veículo (${moneyless(lastFueling.km)} em ${formatDate(lastFueling.createdAt)}).\n\nConfirma salvar este abastecimento mesmo assim?`);
@@ -2614,6 +2623,7 @@ async function onFueling(event) {
       km: Number(data.km),
       liters: Number(data.liters),
       observation: data.observation || "",
+      ...(isAdmin ? { createdAt } : {}),
     };
     const payload = await apiRequest("/fuelings", {
       method: "POST",
@@ -2643,6 +2653,7 @@ async function onFueling(event) {
             km: Number(data.km),
             liters: Number(data.liters),
             observation: data.observation || "",
+            ...(isAdmin ? { createdAt } : {}),
           };
         }
         await enqueueOfflineFueling(requestPayload);
@@ -2695,10 +2706,16 @@ async function onEditFueling(event) {
   const data = Object.fromEntries(new FormData(event.currentTarget));
   const id = editFuelingId;
   if (!id) return;
+  const createdAt = data.createdAt ? new Date(data.createdAt).toISOString() : "";
+  if (!Number.isFinite(new Date(createdAt).getTime())) {
+    toast("Informe uma data e hora válida para o abastecimento.");
+    return;
+  }
   try {
     const payload = await apiRequest(`/fuelings/${encodeURIComponent(id)}`, {
       method: "PUT",
       body: JSON.stringify({
+        createdAt,
         vehicleId: data.vehicleId,
         pump: data.pump,
         km: Number(data.km),

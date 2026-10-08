@@ -687,7 +687,9 @@ async function handle(req, res) {
     const source = body.source === "offline" || body.offlineCreatedAt ? "offline" : "online";
     const offlineCreatedAt = body.offlineCreatedAt ? new Date(body.offlineCreatedAt) : null;
     if (offlineCreatedAt && Number.isNaN(offlineCreatedAt.getTime())) return send(res, 400, { error: "Data do lancamento offline invalida." });
-    const createdAt = source === "offline" && offlineCreatedAt ? offlineCreatedAt : new Date();
+    const requestedCreatedAt = user.role === "admin" && body.createdAt ? new Date(body.createdAt) : null;
+    if (requestedCreatedAt && Number.isNaN(requestedCreatedAt.getTime())) return send(res, 400, { error: "Data e hora do abastecimento invalidas." });
+    const createdAt = source === "offline" && offlineCreatedAt ? offlineCreatedAt : requestedCreatedAt || new Date();
     const syncedAt = source === "offline" ? new Date() : null;
     const [vehiclePhoto, tachographPhoto, pumpPhoto] = await Promise.all([
       uploadPhoto(body.vehiclePhoto, "fuelings/vehicles"),
@@ -746,8 +748,11 @@ async function handle(req, res) {
     const existingRows = await supabase(`fuelings?id=eq.${encodeURIComponent(fuelingId)}&select=*`);
     const existing = existingRows[0];
     if (!existing) return send(res, 404, { error: "Abastecimento nao encontrado." });
+    const createdAt = body.createdAt ? new Date(body.createdAt) : new Date(existing.created_at);
+    if (Number.isNaN(createdAt.getTime())) return send(res, 400, { error: "Data e hora do abastecimento invalidas." });
 
     const update = {
+      created_at: createdAt.toISOString(),
       vehicle_id: body.vehicleId,
       pump: body.pump,
       km: body.km,
@@ -760,6 +765,7 @@ async function handle(req, res) {
     }
 
     const fields = [
+      ["createdAt", "Data e hora", existing.created_at, update.created_at],
       ["vehicleId", "Veiculo", existing.vehicle_id, update.vehicle_id],
       ["pump", "Bomba", existing.pump, update.pump],
       ["km", "Km", Number(existing.km), Number(update.km)],
