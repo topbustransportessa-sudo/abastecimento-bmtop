@@ -867,25 +867,28 @@ function topbusClosingGroups() {
     .forEach((cycle) => {
       const time = cycle.start || cycle.end || 0;
       const shiftStart = operationalShiftStart(time);
-      const target = grouped
-        .filter((group) => group.shiftStart === shiftStart && !group.cycles.some((item) => item.pump === cycle.pump))
-        .map((group) => ({ group, gap: Math.abs(group.anchor - time) }))
-        .filter((item) => item.gap <= 4 * 60 * 60 * 1000)
-        .sort((a, b) => a.gap - b.gap)[0]?.group;
+      const target = grouped.find((group) => group.shiftStart === shiftStart);
       if (target) target.cycles.push(cycle);
       else grouped.push({ anchor: time, shiftStart, cycles: [cycle] });
     });
 
   return grouped.map((group) => {
-    const byPump = Object.fromEntries(group.cycles.map((cycle) => [cycle.pump, cycle]));
-    const allInitial = TOPBUS_AUDIT_PUMPS.every((pump) => byPump[pump]?.initial);
-    const allFinal = TOPBUS_AUDIT_PUMPS.every((pump) => byPump[pump]?.final);
+    const byPumpCycles = Object.fromEntries(TOPBUS_AUDIT_PUMPS.map((pump) => [
+      pump,
+      group.cycles
+        .filter((cycle) => cycle.pump === pump)
+        .sort((a, b) => (a.start || a.end || 0) - (b.start || b.end || 0)),
+    ]));
+    const byPump = Object.fromEntries(TOPBUS_AUDIT_PUMPS.map((pump) => [pump, byPumpCycles[pump][byPumpCycles[pump].length - 1]]));
+    const allInitial = TOPBUS_AUDIT_PUMPS.every((pump) => byPumpCycles[pump].some((cycle) => cycle.initial));
+    const allFinal = TOPBUS_AUDIT_PUMPS.every((pump) => byPumpCycles[pump].some((cycle) => cycle.final));
     const starts = group.cycles.map((cycle) => cycle.start).filter(Number.isFinite);
     const ends = group.cycles.map((cycle) => cycle.end).filter(Number.isFinite);
     return {
       pump: "topbus",
       cycles: group.cycles,
       byPump,
+      byPumpCycles,
       shiftStart: group.shiftStart,
       shiftEnd: operationalShiftEnd(group.shiftStart),
       initial: allInitial,
@@ -925,38 +928,42 @@ function filteredAuditCycles() {
   });
 }
 
+function renderAuditPumpCycleRow(pump, cycle) {
+  const diff = cycle.final ? cycle.measured - cycle.launched : null;
+  const ok = diff !== null && Math.abs(diff) <= 1;
+  const status = cycle.final ? (ok ? "OK" : "Divergência") : "Pendente";
+  const klass = cycle.final ? (ok ? "ok" : "bad") : "info";
+  const start = cycle.start || closingTime(cycle.initial);
+  const end = cycle.end || start;
+  return `<tr class="audit-pump-row">
+    <td>${cycle.initial ? formatDate(cycle.initial.createdAt) : "-"}</td>
+    <td>${cycle.final ? formatDate(cycle.final.createdAt) : "-"}</td>
+    <td><strong>Bomba ${pump}</strong></td>
+    <td>-</td>
+    <td>${cycle.initial ? closingPhotoButton(cycle.initial, cycle.initial.initial) : "-"}</td>
+    <td>${cycle.final ? closingPhotoButton(cycle.final, cycle.final.final) : "-"}</td>
+    <td>-</td><td>-</td>
+    <td>${formatNumber(cycle.measured)}${cycle.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td>
+    <td>-</td>
+    <td>${formatNumber(cycle.launched)}${cycle.launchedNote ? `<small class="table-note">${cycle.launchedNote}</small>` : ""}</td>
+    <td>${diff === null ? "-" : `<span class="badge ${ok ? "ok" : "bad"}">${formatNumber(diff)}</span>`}</td>
+    <td>-</td>
+    <td>${start ? `<button class="table-link" type="button" data-action="audit-fuelings" data-pump="${pump}" data-start="${start}" data-end="${end}">${cycle.fuels.length} - Ver fotos</button>` : "0"}</td>
+    <td><span class="badge ${klass}">${status}</span></td>
+  </tr>`;
+}
+
 function renderAuditPumpRows(group) {
-  return TOPBUS_AUDIT_PUMPS.map((pump) => {
-    const cycle = group.byPump[pump];
-    if (!cycle) return `<tr class="audit-pump-row"><td>-</td><td>-</td><td><strong>Bomba ${pump}</strong></td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>0,00</td><td>-</td><td>0,00</td><td>-</td><td>-</td><td>0</td><td><span class="badge info">Pendente</span></td></tr>`;
-    const diff = cycle.final ? cycle.measured - cycle.launched : null;
-    const ok = diff !== null && Math.abs(diff) <= 1;
-    const status = cycle.final ? (ok ? "OK" : "Divergência") : "Pendente";
-    const klass = cycle.final ? (ok ? "ok" : "bad") : "info";
-    const start = cycle.start || closingTime(cycle.initial);
-    const end = cycle.end || start;
-    return `<tr class="audit-pump-row">
-      <td>${cycle.initial ? formatDate(cycle.initial.createdAt) : "-"}</td>
-      <td>${cycle.final ? formatDate(cycle.final.createdAt) : "-"}</td>
-      <td><strong>Bomba ${pump}</strong></td>
-      <td>-</td>
-      <td>${cycle.initial ? closingPhotoButton(cycle.initial, cycle.initial.initial) : "-"}</td>
-      <td>${cycle.final ? closingPhotoButton(cycle.final, cycle.final.final) : "-"}</td>
-      <td>-</td><td>-</td>
-      <td>${formatNumber(cycle.measured)}${cycle.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td>
-      <td>-</td>
-      <td>${formatNumber(cycle.launched)}${cycle.launchedNote ? `<small class="table-note">${cycle.launchedNote}</small>` : ""}</td>
-      <td>${diff === null ? "-" : `<span class="badge ${ok ? "ok" : "bad"}">${formatNumber(diff)}</span>`}</td>
-      <td>-</td>
-      <td>${start ? `<button class="table-link" type="button" data-action="audit-fuelings" data-pump="${pump}" data-start="${start}" data-end="${end}">${cycle.fuels.length} - Ver fotos</button>` : "0"}</td>
-      <td><span class="badge ${klass}">${status}</span></td>
-    </tr>`;
+  return TOPBUS_AUDIT_PUMPS.flatMap((pump) => {
+    const cycles = group.byPumpCycles?.[pump] || (group.byPump[pump] ? [group.byPump[pump]] : []);
+    if (!cycles.length) return [`<tr class="audit-pump-row"><td>-</td><td>-</td><td><strong>Bomba ${pump}</strong></td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>0,00</td><td>-</td><td>0,00</td><td>-</td><td>-</td><td>0</td><td><span class="badge info">Pendente</span></td></tr>`];
+    return cycles.map((cycle) => renderAuditPumpCycleRow(pump, cycle));
   }).join("");
 }
 
 function renderAuditDispersionDashboard(rows) {
   const summaries = TOPBUS_AUDIT_PUMPS.map((pump) => {
-    const cycles = rows.map((group) => group.byPump[pump]).filter(Boolean);
+    const cycles = rows.flatMap((group) => group.byPumpCycles?.[pump] || (group.byPump[pump] ? [group.byPump[pump]] : []));
     const completeCycles = cycles.filter((cycle) => cycle.final);
     const dispersion = completeCycles.reduce((sum, cycle) => sum + (cycle.measured - cycle.launched), 0);
     const fuelings = completeCycles.reduce((sum, cycle) => sum + (cycle.fuels?.length || 0), 0);
