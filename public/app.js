@@ -623,6 +623,59 @@ function closingDuplicateCandidate(pump, kind, createdAt, ignoreId = "") {
   return null;
 }
 
+function latestFinalClosingBefore(pump, time) {
+  return activePumpClosings()
+    .filter((item) => item.pump === pump && closingTime(item) <= time && (closingKind(item) === "final" || closingKind(item) === "both"))
+    .sort((a, b) => closingTime(b) - closingTime(a))[0] || null;
+}
+
+function latestInitialClosingBefore(pump, time) {
+  return activePumpClosings()
+    .filter((item) => item.pump === pump && closingTime(item) <= time && (closingKind(item) === "initial" || closingKind(item) === "both"))
+    .sort((a, b) => closingTime(b) - closingTime(a))[0] || null;
+}
+
+function closingInitialPreview(pump, value, time) {
+  if (!pump || !Number.isFinite(value) || !Number.isFinite(time)) return { status: "info", message: "Selecione a bomba e informe o valor para comparar com o último encerrante final." };
+  const previousFinal = latestFinalClosingBefore(pump, time);
+  if (!previousFinal) return { status: "info", message: `Nenhum encerrante final anterior encontrado para a Bomba ${pump}.` };
+  const previousValue = Number(previousFinal.final || 0);
+  const diff = value - previousValue;
+  if (Math.abs(diff) < 0.005) {
+    return { status: "ok", diff, message: `Valor igual ao último encerrante final da Bomba ${pump}: ${formatNumber(previousValue)} L.` };
+  }
+  const direction = diff > 0 ? "maior" : "menor";
+  return { status: "bad", diff, message: `Encerrante está ${direction} ${formatNumber(Math.abs(diff))} L que o último final (${formatNumber(previousValue)} L em ${formatDate(previousFinal.createdAt)}).` };
+}
+
+function closingFinalPreview(pump, value, time) {
+  if (!pump || !Number.isFinite(value) || !Number.isFinite(time)) return { status: "info", message: "Selecione a bomba e informe o valor final para prever a dispersão." };
+  const initial = latestInitialClosingBefore(pump, time);
+  if (!initial) return { status: "info", message: `Nenhum encerrante inicial anterior encontrado para a Bomba ${pump}.` };
+  const initialTime = closingTime(initial);
+  const initialValue = Number(initial.initial || 0);
+  const rolledOver = value < initialValue;
+  const measured = rolledOver ? (PUMP_COUNTER_LIMIT - initialValue) + value : value - initialValue;
+  const fuels = closingFuelsInPeriod(pump, initialTime, time);
+  const launched = fuels.reduce((sum, item) => sum + Number(item.liters || 0), 0);
+  const diff = measured - launched;
+  const status = Math.abs(diff) <= 1 ? "ok" : "bad";
+  return {
+    status,
+    diff,
+    measured,
+    launched,
+    message: `Prévia da Bomba ${pump}: encerrante ${formatNumber(measured)} L x abastecimentos ${formatNumber(launched)} L = dispersão ${formatNumber(diff)} L.${rolledOver ? " Virada em 100.000,00 considerada." : ""}`,
+  };
+}
+
+function closingPreview({ pump, kind, value, createdAt }) {
+  const time = new Date(createdAt).getTime();
+  if (kind === "initial") return closingInitialPreview(pump, value, time);
+  if (kind === "final") return closingFinalPreview(pump, value, time);
+  return { status: "info", message: "Selecione o tipo de lançamento para calcular a prévia." };
+}
+
 function latestClosingValue(items, kind) {
   const row = items
     .filter((item) => closingKind(item) === kind || closingKind(item) === "both")
@@ -2015,6 +2068,7 @@ function renderClosings() {
           <div class="field full"><label>Foto do encerrante</label><input name="photo" type="file" accept="image/*" capture="environment" required></div>
           <div class="mobile-photo-preview hidden full" data-photo-preview-for="photo"></div>
         </div>
+        <div class="closing-preview info" data-closing-preview>Selecione a bomba e informe o valor para visualizar a conferência.</div>
         <div class="actions" style="margin-top:14px"><button class="button" type="submit">${icon("save")} Salvar encerrante</button></div>
       </form>
     </section>
@@ -2362,7 +2416,11 @@ function bindEvents() {
   document.querySelector("[data-form='vehicles-bulk']")?.addEventListener("submit", onVehiclesBulk);
   document.querySelector("[data-action='bulk-example']")?.addEventListener("click", fillBulkVehicleExample);
   document.querySelector("[data-form='user']")?.addEventListener("submit", onUser);
-  document.querySelector("[data-form='closing']")?.addEventListener("submit", onClosing);
+  const closingForm = document.querySelector("[data-form='closing']");
+  closingForm?.addEventListener("submit", onClosing);
+  closingForm?.addEventListener("input", updateClosingPreview);
+  closingForm?.addEventListener("change", updateClosingPreview);
+  updateClosingPreview({ currentTarget: closingForm });
   document.querySelector("[data-form='edit-closing']")?.addEventListener("submit", onEditClosing);
   document.querySelector("[data-form='delete-closing']")?.addEventListener("submit", onDeleteClosing);
   const tankMeasurementForm = document.querySelector("[data-form='tank-measurement']");
@@ -2787,6 +2845,19 @@ function previewFueling(event) {
   if (preview) preview.textContent = "";
 }
 
+function updateClosingPreview(event) {
+  const form = event.currentTarget?.matches?.("[data-form='closing']") ? event.currentTarget : event.currentTarget?.closest?.("[data-form='closing']") || document.querySelector("[data-form='closing']");
+  const preview = form?.querySelector("[data-closing-preview]");
+  if (!form || !preview) return;
+  const data = Object.fromEntries(new FormData(form));
+  const isAdmin = currentUser()?.role === "admin";
+  const createdAt = isAdmin && data.createdAt ? new Date(data.createdAt).toISOString() : new Date().toISOString();
+  const value = parseLocaleNumber(data.value);
+  const result = closingPreview({ pump: data.pump, kind: data.kind, value, createdAt });
+  preview.className = `closing-preview ${result.status}`;
+  preview.textContent = result.message;
+}
+
 async function onVehicle(event) {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.currentTarget));
@@ -3010,6 +3081,15 @@ async function onClosing(event) {
   if (!Number.isFinite(value) || value < 0) {
     toast("Informe um valor de encerrante válido.");
     return;
+  }
+  const preview = closingPreview({ pump: data.pump, kind: data.kind, value, createdAt });
+  if (data.kind === "initial" && preview.status === "bad") {
+    const confirmed = window.confirm(`${preview.message}\n\nDeseja confirmar o lançamento inicial mesmo com divergência?`);
+    if (!confirmed) return;
+  }
+  if (data.kind === "final" && Number.isFinite(preview.diff)) {
+    const confirmed = window.confirm(`${preview.message}\n\nDeseja confirmar o lançamento final?`);
+    if (!confirmed) return;
   }
   const photo = await fileToDataUrl(form.photo.files[0]);
   if (!photo) {

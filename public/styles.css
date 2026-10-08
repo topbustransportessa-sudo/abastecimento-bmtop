@@ -344,6 +344,32 @@ textarea {
   color: var(--bad);
 }
 
+.closing-preview {
+  min-height: 46px;
+  display: grid;
+  align-content: center;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--info);
+  border-radius: var(--radius);
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.closing-preview.ok {
+  border-left-color: var(--ok);
+  color: var(--ok);
+}
+
+.closing-preview.bad {
+  border-left-color: var(--bad);
+  color: var(--bad);
+}
+
 .audit-table table {
   min-width: 1640px;
 }
