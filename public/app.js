@@ -53,6 +53,7 @@ let tankMeasurementConfigLoaded = false;
 let editUserId = "";
 let showChangePassword = false;
 let fuelingSubmitting = false;
+let closingSubmitting = false;
 let offlinePendingCount = 0;
 let offlineSyncing = false;
 let initialDataRefreshing = false;
@@ -3067,8 +3068,10 @@ async function onChangePassword(event) {
 
 async function onClosing(event) {
   event.preventDefault();
+  if (closingSubmitting) return;
   const isAdmin = currentUser()?.role === "admin";
   const form = event.currentTarget;
+  const submitButton = form.querySelector("button[type='submit']");
   const data = Object.fromEntries(new FormData(form));
   if (!form.reportValidity()) return;
   const value = parseLocaleNumber(data.value);
@@ -3102,6 +3105,11 @@ async function onClosing(event) {
     const confirmed = window.confirm(`Já existe encerrante ${kindLabel} para a Bomba ${data.pump} neste ciclo:\n\nValor atual: ${formatNumber(closingValue(duplicate))}\nData/hora: ${formatDate(duplicate.createdAt)}\n\nDeseja substituir pelo novo valor ${formatNumber(value)}?`);
     if (!confirmed) return;
   }
+  closingSubmitting = true;
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.innerHTML = `${icon("save")} Salvando...`;
+  }
   try {
     const payload = await apiRequest("/closings", {
       method: "POST",
@@ -3116,8 +3124,14 @@ async function onClosing(event) {
       ? `${payload.replaced ? "Encerrante substituído." : "Alerta"} Divergência na bomba ${data.pump}: diferença de ${formatNumber(cycle.diff)} litros.`
       : `${data.kind === "final" ? "Encerrante final" : "Encerrante inicial"} ${payload.replaced ? "substituído" : "salvo"}. ${cycle.rolledOver ? "Encerrante virou em 100.000,00. " : ""}Diferença da bomba ${data.pump}: ${formatNumber(cycle.diff)} litros.`;
     toast(message);
+    closingSubmitting = false;
     render();
   } catch (error) {
+    closingSubmitting = false;
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.innerHTML = `${icon("save")} Salvar encerrante`;
+    }
     toast(error.message);
   }
 }

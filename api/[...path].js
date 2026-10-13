@@ -150,6 +150,10 @@ function pumpClosingKind(row) {
   return "initial";
 }
 
+function pumpClosingValue(row) {
+  return pumpClosingKind(row) === "final" ? Number(row.final || 0) : Number(row.initial || 0);
+}
+
 function mapDieselTank(row) {
   return {
     id: row.id,
@@ -588,7 +592,6 @@ async function handle(req, res) {
         return send(res, 400, { error: "Tipo de encerrante invalido." });
       }
     }
-    const photo = await uploadPhoto(body.photo, "pump-closings");
     if (body.replaceId) {
       const existingRows = await supabase(`pump_closings?id=eq.${encodeURIComponent(body.replaceId)}&select=*`);
       const existing = existingRows[0];
@@ -597,12 +600,21 @@ async function handle(req, res) {
       if (existing.pump !== body.pump || pumpClosingKind(existing) !== body.kind) {
         return send(res, 400, { error: "O encerrante selecionado nao corresponde a mesma bomba e tipo." });
       }
+      const photo = await uploadPhoto(body.photo, "pump-closings");
       const rows = await supabase(`pump_closings?id=eq.${encodeURIComponent(body.replaceId)}`, {
         method: "PATCH",
         body: JSON.stringify({ date, pump: body.pump, initial, final, photo_url: photo, created_at: createdAt.toISOString(), user_id: user.id }),
       });
       return send(res, 200, { closing: mapClosing(rows[0]), replaced: true });
     }
+    const duplicateWindowStart = encodeURIComponent(new Date(createdAt.getTime() - 5 * 60 * 1000).toISOString());
+    const duplicateWindowEnd = encodeURIComponent(new Date(createdAt.getTime() + 5 * 60 * 1000).toISOString());
+    const duplicateRows = await supabase(`pump_closings?pump=eq.${encodeURIComponent(body.pump)}&created_at=gte.${duplicateWindowStart}&created_at=lte.${duplicateWindowEnd}&deleted_at=is.null&select=*`);
+    const duplicate = duplicateRows.find((row) => pumpClosingKind(row) === body.kind && Math.abs(pumpClosingValue(row) - pumpClosingValue({ initial, final })) < 0.005);
+    if (duplicate) {
+      return send(res, 409, { error: `Este encerrante parece duplicado de um lançamento já salvo em ${new Date(duplicate.created_at).toLocaleString("pt-BR")}. Confira o histórico antes de tentar novamente.` });
+    }
+    const photo = await uploadPhoto(body.photo, "pump-closings");
     const rows = await supabase("pump_closings", {
       method: "POST",
       body: JSON.stringify({ date, pump: body.pump, initial, final, photo_url: photo, created_at: createdAt.toISOString(), user_id: user.id }),
