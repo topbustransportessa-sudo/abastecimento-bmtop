@@ -1,5 +1,5 @@
 const crypto = require("crypto");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -433,6 +433,18 @@ async function uploadPhoto(dataUrl, folder) {
   return process.env.R2_PUBLIC_URL ? `${process.env.R2_PUBLIC_URL.replace(/\/$/, "")}/${key}` : key;
 }
 
+function fuelingPhotoKey(value, kind) {
+  if (!value) return "";
+  let path = String(value);
+  if (/^https?:\/\//i.test(path)) path = new URL(path).pathname;
+  const key = decodeURIComponent(path).replace(/^\/+/, "");
+  const folder = { vehicle: "vehicles", tachograph: "tachographs", pump: "pumps" }[kind];
+  const marker = `fuelings/${folder}/`;
+  const index = key.indexOf(marker);
+  const result = index < 0 ? "" : key.slice(index);
+  return new RegExp(`^fuelings/${folder}/[A-Za-z0-9._-]+$`).test(result) ? result : "";
+}
+
 async function handle(req, res) {
   const route = `/${(Array.isArray(req.query.path) ? req.query.path : []).join("/")}`;
   if (req.method === "GET" && route === "/health") return send(res, 200, { ok: true });
@@ -748,6 +760,28 @@ async function handle(req, res) {
   }
 
   const fuelingMatch = route.match(/^\/fuelings\/([^/]+)$/);
+  if (req.method === "GET" && fuelingMatch) {
+    const rows = await supabase(`fuelings?id=eq.${encodeURIComponent(decodeURIComponent(fuelingMatch[1]))}&select=*`);
+    if (!rows[0]) return send(res, 404, { error: "Abastecimento nao encontrado." });
+    return send(res, 200, { fueling: mapFueling(rows[0]) });
+  }
+
+  const fuelingPhotoMatch = route.match(/^\/fuelings\/([^/]+)\/photos\/(vehicle|tachograph|pump)$/);
+  if (req.method === "GET" && fuelingPhotoMatch) {
+    const [, rawId, kind] = fuelingPhotoMatch;
+    const column = { vehicle: "vehicle_photo_url", tachograph: "tachograph_photo_url", pump: "pump_photo_url" }[kind];
+    const rows = await supabase(`fuelings?id=eq.${encodeURIComponent(decodeURIComponent(rawId))}&select=${column}`);
+    if (!rows[0]) return send(res, 404, { error: "Abastecimento nao encontrado." });
+    const key = fuelingPhotoKey(rows[0][column], kind);
+    if (!key) return send(res, 404, { error: "Foto nao encontrada no armazenamento." });
+    const photo = await getR2Client().send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    const bytes = await photo.Body.transformToByteArray();
+    res.status(200)
+      .setHeader("content-type", photo.ContentType?.startsWith("image/") ? photo.ContentType : "image/jpeg")
+      .setHeader("cache-control", "private, max-age=300")
+      .setHeader("x-content-type-options", "nosniff");
+    return res.end(Buffer.from(bytes));
+  }
   if (req.method === "PUT" && fuelingMatch) {
     requireAdmin(user);
     const fuelingId = decodeURIComponent(fuelingMatch[1]);

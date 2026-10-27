@@ -41,6 +41,7 @@ let consumptionByFuelingId = new Map();
 let sidebarOpen = false;
 let showFuelingForm = false;
 let detailFuelingId = "";
+const fuelingPhotoObjectUrls = new Set();
 let deleteTargetId = "";
 let deleteClosingId = "";
 let editFuelingId = "";
@@ -800,14 +801,53 @@ function photoPreview(value) {
   return value ? `<div class="photo-preview"><img src="${value}" alt="Foto anexada"></div>` : "";
 }
 
-function photoLink(value, label) {
+function photoLink(value, label, fuelingPhoto = "") {
   if (!value) return `<div class="photo-card empty"><span>${label}</span><strong>Sem foto</strong></div>`;
   return `
-    <a class="photo-card" href="${value}" target="_blank" rel="noopener">
+    <a class="photo-card" href="${value}" target="_blank" rel="noopener" ${fuelingPhoto ? `data-fueling-photo="${fuelingPhoto}"` : ""}>
       <img src="${value}" alt="${label}">
       <span>${label}</span>
     </a>
   `;
+}
+
+function showPhotoError(card, image) {
+  image.remove();
+  card.removeAttribute("href");
+  card.classList.add("empty");
+  const message = document.createElement("strong");
+  message.textContent = "Foto indisponível no momento";
+  card.append(message);
+}
+
+function bindFuelingPhotoFallbacks() {
+  document.querySelectorAll("[data-fueling-photo]").forEach((card) => {
+    const image = card.querySelector("img");
+    const [id, kind] = card.dataset.fuelingPhoto.split(":");
+    async function recoverPhoto() {
+      if (card.dataset.recovering) return;
+      card.dataset.recovering = "true";
+      try {
+        const response = await fetch(`/api/fuelings/${encodeURIComponent(id)}/photos/${kind}`, {
+          headers: { authorization: `Bearer ${sessionToken}` },
+        });
+        if (!response.ok) throw new Error("Foto indisponivel.");
+        const url = URL.createObjectURL(await response.blob());
+        if (!card.isConnected) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        fuelingPhotoObjectUrls.add(url);
+        image.onerror = () => showPhotoError(card, image);
+        image.src = url;
+        card.href = url;
+      } catch {
+        if (card.isConnected) showPhotoError(card, image);
+      }
+    }
+    image.addEventListener("error", recoverPhoto, { once: true });
+    if (image.complete && !image.naturalWidth) recoverPhoto();
+  });
 }
 
 function closingPhotoButton(item, value) {
@@ -1092,6 +1132,8 @@ function renderAuditFuelingsModal() {
 }
 
 function render() {
+  fuelingPhotoObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  fuelingPhotoObjectUrls.clear();
   const user = currentUser();
   if (!user) {
     renderLogin();
@@ -1137,6 +1179,7 @@ function render() {
     </div>
   `;
   bindEvents();
+  bindFuelingPhotoFallbacks();
 }
 
 function renderOfflineStatus() {
@@ -1472,9 +1515,9 @@ function renderFuelingDetails() {
           <div class="full"><span>Observação</span><strong>${fuelingObservation(item) || "-"}</strong></div>
         </div>
         <div class="photo-grid">
-          ${photoLink(item.vehiclePhoto, "Foto do carro")}
-          ${photoLink(item.tachographPhoto, "Foto do tacógrafo")}
-          ${photoLink(item.pumpPhoto, "Foto do encerrante")}
+          ${photoLink(item.vehiclePhoto, "Foto do carro", `${item.id}:vehicle`)}
+          ${photoLink(item.tachographPhoto, "Foto do tacógrafo", `${item.id}:tachograph`)}
+          ${photoLink(item.pumpPhoto, "Foto do encerrante", `${item.id}:pump`)}
         </div>
         ${renderFuelingAuditHistory(item.id)}
       </section>
@@ -2293,9 +2336,18 @@ function bindEvents() {
     showFuelingForm = false;
     render();
   }));
-  document.querySelectorAll("[data-action='detail-fueling']").forEach((button) => button.addEventListener("click", () => {
-    detailFuelingId = button.dataset.id;
+  document.querySelectorAll("[data-action='detail-fueling']").forEach((button) => button.addEventListener("click", async () => {
+    const id = button.dataset.id;
+    detailFuelingId = id;
     render();
+    try {
+      const { fueling } = await apiRequest(`/fuelings/${encodeURIComponent(id)}`);
+      const index = state.fuelings.findIndex((item) => item.id === id);
+      if (index !== -1) state.fuelings[index] = fueling;
+      if (detailFuelingId === id) render();
+    } catch (error) {
+      console.error("Nao foi possivel atualizar as fotos do abastecimento.", error);
+    }
   }));
   document.querySelectorAll("[data-action='close-detail']").forEach((button) => button.addEventListener("click", () => {
     detailFuelingId = "";
