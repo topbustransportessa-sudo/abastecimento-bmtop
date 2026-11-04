@@ -605,6 +605,7 @@ async function handle(req, res) {
       }
     }
     if (body.replaceId) {
+      requireAdmin(user);
       const existingRows = await supabase(`pump_closings?id=eq.${encodeURIComponent(body.replaceId)}&select=*`);
       const existing = existingRows[0];
       if (!existing) return send(res, 404, { error: "Encerrante para substituicao nao encontrado." });
@@ -625,6 +626,14 @@ async function handle(req, res) {
     const duplicate = duplicateRows.find((row) => pumpClosingKind(row) === body.kind && Math.abs(pumpClosingValue(row) - pumpClosingValue({ initial, final })) < 0.005);
     if (duplicate) {
       return send(res, 409, { error: `Este encerrante parece duplicado de um lançamento já salvo em ${new Date(duplicate.created_at).toLocaleString("pt-BR")}. Confira o histórico antes de tentar novamente.` });
+    }
+    const previousRows = await supabase(`pump_closings?pump=eq.${encodeURIComponent(body.pump)}&created_at=lte.${encodeURIComponent(createdAt.toISOString())}&deleted_at=is.null&select=id,initial,final,created_at&order=created_at.desc&limit=1`);
+    const previousKind = previousRows[0] ? pumpClosingKind(previousRows[0]) : "";
+    if (body.kind === "initial" && previousKind === "initial") {
+      return send(res, 409, { error: "Ja existe uma abertura sem encerrante final nesta bomba. Conclua o ciclo antes de iniciar outro." });
+    }
+    if (body.kind === "final" && previousKind !== "initial") {
+      return send(res, 409, { error: "Lance o encerrante inicial desta bomba antes do final. O fechamento anterior nao sera substituido." });
     }
     const photo = await uploadPhoto(body.photo, "pump-closings");
     const rows = await supabase("pump_closings", {

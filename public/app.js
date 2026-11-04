@@ -594,35 +594,10 @@ function lastItem(items) {
   return items.length ? items[items.length - 1] : null;
 }
 
-function closingDuplicateCandidate(pump, kind, createdAt, ignoreId = "") {
-  const time = new Date(createdAt).getTime();
-  if (!Number.isFinite(time)) return null;
-  const items = activePumpClosings()
-    .filter((item) => item.pump === pump && item.id !== ignoreId)
-    .sort((a, b) => closingTime(a) - closingTime(b));
-  if (kind === "initial") {
-    const previous = lastItem(items.filter((item) => closingTime(item) <= time));
-    return previous && closingKind(previous) === "initial" ? previous : null;
-  }
-  if (kind === "final") {
-    const previousItems = items.filter((item) => closingTime(item) <= time);
-    const latestInitial = lastItem(previousItems.filter((item) => closingKind(item) === "initial" || closingKind(item) === "both"));
-    if (!latestInitial) {
-      const previous = lastItem(previousItems);
-      return previous && closingKind(previous) === "final" ? previous : null;
-    }
-    const nextInitial = items.find((item) => closingTime(item) > closingTime(latestInitial) && closingKind(item) === "initial");
-    const final = items
-      .filter((item) => {
-        const itemTime = closingTime(item);
-        return (closingKind(item) === "final" || closingKind(item) === "both")
-          && itemTime > closingTime(latestInitial)
-          && (!nextInitial || itemTime < closingTime(nextInitial));
-      })
-      .slice(-1)[0];
-    return final || null;
-  }
-  return null;
+function latestClosingBefore(pump, time) {
+  return activePumpClosings()
+    .filter((item) => item.pump === pump && closingTime(item) <= time)
+    .sort((a, b) => closingTime(b) - closingTime(a))[0] || null;
 }
 
 function latestFinalClosingBefore(pump, time) {
@@ -961,12 +936,20 @@ function topbusClosingGroups() {
     .forEach((cycle) => {
       const time = cycle.start || cycle.end || 0;
       const shiftStart = operationalShiftStart(time);
-      const target = grouped.find((group) => group.shiftStart === shiftStart);
+      let target = grouped.filter((group) => group.shiftStart === shiftStart).slice(-1)[0];
+      const previousEnd = target ? Math.max(...target.cycles.map((item) => item.final ? closingTime(item.final) : 0)) : 0;
+      if (target && target.cycles.every((item) => item.final) && time > previousEnd) target = null;
       if (target) target.cycles.push(cycle);
       else grouped.push({ anchor: time, shiftStart, cycles: [cycle] });
     });
 
   return grouped.map((group) => {
+    const pumpCount = (item) => new Set(item.cycles.map((cycle) => cycle.pump)).size;
+    const duration = (item) => Math.max(...item.cycles.map((cycle) => cycle.final ? closingTime(cycle.final) : cycle.start)) - item.anchor;
+    const normalGroup = grouped
+      .filter((item) => item.shiftStart === group.shiftStart)
+      .sort((a, b) => pumpCount(b) - pumpCount(a) || duration(b) - duration(a))[0];
+    const extra = group !== normalGroup || (pumpCount(group) < TOPBUS_AUDIT_PUMPS.length && group.cycles.every((cycle) => cycle.initial && cycle.final));
     const byPumpCycles = Object.fromEntries(TOPBUS_AUDIT_PUMPS.map((pump) => [
       pump,
       group.cycles
@@ -983,10 +966,11 @@ function topbusClosingGroups() {
       cycles: group.cycles,
       byPump,
       byPumpCycles,
+      extra,
       shiftStart: group.shiftStart,
       shiftEnd: operationalShiftEnd(group.shiftStart),
-      initial: allInitial,
-      final: allFinal,
+      initial: extra ? group.cycles.every((cycle) => cycle.initial) : allInitial,
+      final: extra ? group.cycles.every((cycle) => cycle.final) : allFinal,
       start: starts.length ? Math.min(...starts) : null,
       end: ends.length ? Math.max(...ends) : null,
       measured: group.cycles.reduce((sum, cycle) => sum + Number(cycle.measured || 0), 0),
@@ -999,14 +983,16 @@ function topbusClosingGroups() {
 }
 
 function auditCycleMetrics(closingCycle) {
-  const tankCycle = tankCycleForClosing(closingCycle);
+  const tankCycle = closingCycle.extra ? null : tankCycleForClosing(closingCycle);
   const tankLiters = tankCycle?.usedLiters ?? null;
   const fuelDiff = closingCycle.final ? closingCycle.measured - closingCycle.launched : null;
   const tankDiff = closingCycle.final && tankLiters !== null ? closingCycle.measured - tankLiters : null;
   const fuelOk = fuelDiff !== null && Math.abs(fuelDiff) <= 1;
   const tankOk = tankDiff !== null && Math.abs(tankDiff) <= 30;
-  const complete = Boolean(closingCycle.final && tankCycle?.final);
-  const status = complete ? (fuelOk && tankOk ? "ok" : "divergent") : "pending";
+  const complete = closingCycle.extra
+    ? closingCycle.cycles.every((cycle) => cycle.initial && cycle.final)
+    : Boolean(closingCycle.final && tankCycle?.final);
+  const status = complete ? (fuelOk && (closingCycle.extra || tankOk) ? "ok" : "divergent") : "pending";
   return { tankCycle, tankLiters, fuelDiff, tankDiff, fuelOk, tankOk, status };
 }
 
@@ -1014,8 +1000,8 @@ function filteredAuditCycles() {
   const fromTime = closingFilters.from ? new Date(closingFilters.from).getTime() : null;
   const toTime = closingFilters.to ? new Date(closingFilters.to).getTime() : null;
   return topbusClosingGroups().filter((item) => {
-    const start = item.shiftStart || item.start || item.end || closingTime(item.initial) || closingTime(item.final);
-    const end = item.shiftEnd || item.end || item.start || start;
+    const start = (item.extra ? item.start : item.shiftStart) || item.start || item.end || closingTime(item.initial) || closingTime(item.final);
+    const end = (item.extra ? item.end : item.shiftEnd) || item.end || item.start || start;
     return (!fromTime || end >= fromTime)
       && (!toTime || start <= toTime)
       && (!closingFilters.status || auditCycleMetrics(item).status === closingFilters.status);
@@ -1048,7 +1034,8 @@ function renderAuditPumpCycleRow(pump, cycle) {
 }
 
 function renderAuditPumpRows(group) {
-  return TOPBUS_AUDIT_PUMPS.flatMap((pump) => {
+  const pumps = group.extra ? TOPBUS_AUDIT_PUMPS.filter((pump) => group.byPumpCycles?.[pump]?.length) : TOPBUS_AUDIT_PUMPS;
+  return pumps.flatMap((pump) => {
     const cycles = group.byPumpCycles?.[pump] || (group.byPump[pump] ? [group.byPump[pump]] : []);
     if (!cycles.length) return [`<tr class="audit-pump-row"><td>-</td><td>-</td><td><strong>Bomba ${pump}</strong></td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>0,00</td><td>-</td><td>0,00</td><td>-</td><td>-</td><td>0</td><td><span class="badge info">Pendente</span></td></tr>`];
     return cycles.map((cycle) => renderAuditPumpCycleRow(pump, cycle));
@@ -1941,7 +1928,8 @@ function renderAudit() {
         const tank = dieselReceivingData.tanks.find((candidate) => candidate.id === metrics.tankCycle?.tankId);
         const statusLabel = metrics.status === "ok" ? "OK" : metrics.status === "divergent" ? "Divergência" : "Pendente";
         const klass = metrics.status === "ok" ? "ok" : metrics.status === "divergent" ? "bad" : "info";
-        const totalRow = `<tr class="audit-total-row"><td>${item.start ? formatDate(new Date(item.start).toISOString()) : "-"}</td><td>${item.final && item.end ? formatDate(new Date(item.end).toISOString()) : "-"}</td><td><strong>Total 1 + 5 + 6</strong></td><td>${tank ? `${tank.company}<small class="table-note">${tank.name}</small>` : "-"}</td><td colspan="2"><span class="table-note">Detalhado por bomba abaixo</span></td><td>${metrics.tankCycle?.initial ? tankMeasurementPhotoButton(metrics.tankCycle.initial) : "-"}</td><td>${metrics.tankCycle?.final ? tankMeasurementPhotoButton(metrics.tankCycle.final) : "-"}</td><td>${formatNumber(item.measured)}${item.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td><td>${metrics.tankLiters === null ? "-" : formatNumber(metrics.tankLiters)}</td><td>${formatNumber(item.launched)}${item.launchedNote ? `<small class="table-note">${item.launchedNote}</small>` : ""}</td><td>${metrics.fuelDiff === null ? "-" : `<span class="badge ${metrics.fuelOk ? "ok" : "bad"}">${formatNumber(metrics.fuelDiff)}</span>`}</td><td>${metrics.tankDiff === null ? "-" : `<span class="badge ${metrics.tankOk ? "ok" : "bad"}">${formatNumber(metrics.tankDiff)}</span>`}</td><td>${item.fuels.length}</td><td><span class="badge ${klass}">${statusLabel}</span></td></tr>`;
+        const groupLabel = item.extra ? `Abertura extra - ${Object.keys(item.byPumpCycles).filter((pump) => item.byPumpCycles[pump].length).map((pump) => `Bomba ${pump}`).join(" + ")}` : "Total 1 + 5 + 6";
+        const totalRow = `<tr class="audit-total-row"><td>${item.start ? formatDate(new Date(item.start).toISOString()) : "-"}</td><td>${item.final && item.end ? formatDate(new Date(item.end).toISOString()) : "-"}</td><td><strong>${groupLabel}</strong></td><td>${tank ? `${tank.company}<small class="table-note">${tank.name}</small>` : "-"}</td><td colspan="2"><span class="table-note">Detalhado por bomba abaixo</span></td><td>${metrics.tankCycle?.initial ? tankMeasurementPhotoButton(metrics.tankCycle.initial) : "-"}</td><td>${metrics.tankCycle?.final ? tankMeasurementPhotoButton(metrics.tankCycle.final) : "-"}</td><td>${formatNumber(item.measured)}${item.rolledOver ? ` <span class="badge info">Virou</span>` : ""}</td><td>${metrics.tankLiters === null ? "-" : formatNumber(metrics.tankLiters)}</td><td>${formatNumber(item.launched)}${item.launchedNote ? `<small class="table-note">${item.launchedNote}</small>` : ""}</td><td>${metrics.fuelDiff === null ? "-" : `<span class="badge ${metrics.fuelOk ? "ok" : "bad"}">${formatNumber(metrics.fuelDiff)}</span>`}</td><td>${metrics.tankDiff === null ? "-" : `<span class="badge ${metrics.tankOk ? "ok" : "bad"}">${formatNumber(metrics.tankDiff)}</span>`}</td><td>${item.fuels.length}</td><td><span class="badge ${klass}">${statusLabel}</span></td></tr>`;
         return `${totalRow}${renderAuditPumpRows(item)}`;
       }).join("") || `<tr><td colspan="15">Nenhuma conciliação encontrada.</td></tr>`}
     </tbody></table></section>`;
@@ -3137,6 +3125,15 @@ async function onClosing(event) {
     toast("Informe um valor de encerrante válido.");
     return;
   }
+  const previous = latestClosingBefore(data.pump, createdTime);
+  if (data.kind === "initial" && previous && closingKind(previous) === "initial") {
+    toast("Esta bomba já tem uma abertura sem encerrante final. Conclua o ciclo antes de abrir outro.");
+    return;
+  }
+  if (data.kind === "final" && (!previous || closingKind(previous) !== "initial")) {
+    toast("Lance o encerrante inicial desta bomba antes do final. O fechamento anterior será preservado.");
+    return;
+  }
   const preview = closingPreview({ pump: data.pump, kind: data.kind, value, createdAt });
   if (data.kind === "initial" && preview.status === "bad") {
     const confirmed = window.confirm(`${preview.message}\n\nDeseja confirmar o lançamento inicial mesmo com divergência?`);
@@ -3151,12 +3148,6 @@ async function onClosing(event) {
     toast("A foto do encerrante é obrigatória.");
     return;
   }
-  const duplicate = closingDuplicateCandidate(data.pump, data.kind, createdAt);
-  if (duplicate) {
-    const kindLabel = data.kind === "final" ? "final" : "inicial";
-    const confirmed = window.confirm(`Já existe encerrante ${kindLabel} para a Bomba ${data.pump} neste ciclo:\n\nValor atual: ${formatNumber(closingValue(duplicate))}\nData/hora: ${formatDate(duplicate.createdAt)}\n\nDeseja substituir pelo novo valor ${formatNumber(value)}?`);
-    if (!confirmed) return;
-  }
   closingSubmitting = true;
   if (submitButton) {
     submitButton.disabled = true;
@@ -3165,16 +3156,15 @@ async function onClosing(event) {
   try {
     const payload = await apiRequest("/closings", {
       method: "POST",
-      body: JSON.stringify({ ...(isAdmin ? { createdAt } : {}), pump: data.pump, kind: data.kind, value, photo, ...(duplicate ? { replaceId: duplicate.id } : {}) }),
+      body: JSON.stringify({ ...(isAdmin ? { createdAt } : {}), pump: data.pump, kind: data.kind, value, photo }),
     });
-    if (payload.replaced) state.pumpClosings = state.pumpClosings.map((item) => item.id === payload.closing.id ? payload.closing : item);
-    else state.pumpClosings.unshift(payload.closing);
+    state.pumpClosings.unshift(payload.closing);
     const cycle = latestClosingCycle(data.pump);
     const message = cycle.status === "pending"
-      ? `${data.kind === "final" ? "Encerrante final" : "Encerrante inicial"} ${payload.replaced ? "substituído" : "salvo"}. Aguardando o outro lançamento para conciliar.`
+      ? `${data.kind === "final" ? "Encerrante final" : "Encerrante inicial"} salvo. Aguardando o outro lançamento para conciliar.`
       : cycle.status === "divergent"
-      ? `${payload.replaced ? "Encerrante substituído." : "Alerta"} Divergência na bomba ${data.pump}: diferença de ${formatNumber(cycle.diff)} litros.`
-      : `${data.kind === "final" ? "Encerrante final" : "Encerrante inicial"} ${payload.replaced ? "substituído" : "salvo"}. ${cycle.rolledOver ? "Encerrante virou em 100.000,00. " : ""}Diferença da bomba ${data.pump}: ${formatNumber(cycle.diff)} litros.`;
+      ? `Alerta de divergência na bomba ${data.pump}: diferença de ${formatNumber(cycle.diff)} litros.`
+      : `${data.kind === "final" ? "Encerrante final" : "Encerrante inicial"} salvo. ${cycle.rolledOver ? "Encerrante virou em 100.000,00. " : ""}Diferença da bomba ${data.pump}: ${formatNumber(cycle.diff)} litros.`;
     toast(message);
     closingSubmitting = false;
     render();
