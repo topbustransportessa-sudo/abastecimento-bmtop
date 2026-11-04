@@ -606,12 +606,6 @@ function latestFinalClosingBefore(pump, time) {
     .sort((a, b) => closingTime(b) - closingTime(a))[0] || null;
 }
 
-function latestInitialClosingBefore(pump, time) {
-  return activePumpClosings()
-    .filter((item) => item.pump === pump && closingTime(item) <= time && (closingKind(item) === "initial" || closingKind(item) === "both"))
-    .sort((a, b) => closingTime(b) - closingTime(a))[0] || null;
-}
-
 function closingInitialPreview(pump, value, time) {
   if (!pump || !Number.isFinite(value) || !Number.isFinite(time)) return { status: "info", message: "Selecione a bomba e informe o valor para comparar com o último encerrante final." };
   const previousFinal = latestFinalClosingBefore(pump, time);
@@ -627,8 +621,8 @@ function closingInitialPreview(pump, value, time) {
 
 function closingFinalPreview(pump, value, time) {
   if (!pump || !Number.isFinite(value) || !Number.isFinite(time)) return { status: "info", message: "Selecione a bomba e informe o valor final para prever a dispersão." };
-  const initial = latestInitialClosingBefore(pump, time);
-  if (!initial) return { status: "info", message: `Nenhum encerrante inicial anterior encontrado para a Bomba ${pump}.` };
+  const initial = latestClosingBefore(pump, time);
+  if (!initial || closingKind(initial) !== "initial") return { status: "info", message: `Lance um novo encerrante inicial para a Bomba ${pump} antes de informar o final.` };
   const initialTime = closingTime(initial);
   const initialValue = Number(initial.initial || 0);
   const rolledOver = value < initialValue;

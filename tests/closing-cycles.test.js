@@ -80,6 +80,18 @@ test("a mechanic opening before the regular shift stays separate", () => {
   assert.equal(groups.find((group) => !group.extra).cycles.length, 3);
 });
 
+test("final preview does not reuse the initial from a closed cycle", () => {
+  const context = appContext();
+  context.closings = [
+    { id: "old-initial", pump: "1", initial: 2903, final: 0, createdAt: "2026-11-03T17:00:00-03:00" },
+    { id: "old-final", pump: "1", initial: 0, final: 2976, createdAt: "2026-11-04T03:07:00-03:00" },
+  ];
+  vm.runInContext("state.pumpClosings = closings", context);
+  const preview = vm.runInContext("closingFinalPreview('1', 30740, new Date('2026-11-04T14:40:00-03:00').getTime())", context);
+  assert.equal(preview.status, "info");
+  assert.match(preview.message, /novo encerrante inicial/);
+});
+
 test("closing after a prior final requires a new initial instead of replacing it", async () => {
   process.env.SUPABASE_URL = "https://example.supabase.co";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "test-key";
