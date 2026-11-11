@@ -1944,6 +1944,7 @@ function renderDieselReceivingLaunch() {
         <div class="field"><label>Fornecedor</label><input name="supplier" required></div>
         <div class="field"><label>Número da nota fiscal</label><input name="invoiceNumber" required></div>
         <div class="field"><label>Quantidade NF em litros</label><input name="invoiceLiters" type="number" min="0.01" step="0.01" required></div>
+        <div class="field"><label>Valor unitário do diesel (R$/L)</label><input name="invoiceUnitPrice" type="number" min="0.0001" step="0.0001" inputmode="decimal" required></div>
         <div class="field"><label>Foto da carreta lacrada</label><input name="sealedTruckPhoto" type="file" accept="image/*" capture="environment" required></div>
         <div class="field"><label>Medição inicial mm</label><input name="initialMm" type="number" min="0" step="1" required></div>
         <div class="field"><label>Foto medição inicial</label><input name="initialPhoto" type="file" accept="image/*" capture="environment" required></div>
@@ -1988,11 +1989,11 @@ function renderDieselReceivingReport() {
         <div class="field"><label>Divergência</label><select name="divergence"><option value="">Todos</option><option value="yes" ${dieselReceivingFilters.divergence === "yes" ? "selected" : ""}>Com divergência</option><option value="no" ${dieselReceivingFilters.divergence === "no" ? "selected" : ""}>Sem divergência</option></select></div>
       </div>
     </section>
-    <section class="table-wrap"><table><thead><tr><th>Data</th><th>Empresa</th><th>Tanque</th><th>Fornecedor</th><th>Placa</th><th>NF litros</th><th>Inicial L</th><th>Final L</th><th>Apurado</th><th>Dif. L</th><th>Dif. %</th><th>Status</th><th>Detalhes</th></tr></thead><tbody>
+    <section class="table-wrap"><table><thead><tr><th>Data</th><th>Empresa</th><th>Tanque</th><th>Fornecedor</th><th>Placa</th><th>NF litros</th><th>Preço R$/L</th><th>Inicial L</th><th>Final L</th><th>Apurado</th><th>Dif. L</th><th>Dif. %</th><th>Status</th><th>Detalhes</th></tr></thead><tbody>
       ${rows.map((item) => {
         const conversion = dieselReceiptConversion(item);
-        return `<tr><td>${formatDate(item.receivedAt)}</td><td>${item.company}</td><td>${dieselReceivingData.tanks.find((tank) => tank.id === item.tankId)?.name || "-"}</td><td>${item.supplier}</td><td>${item.trailerPlate}</td><td>${formatNumber(item.invoiceLiters)}</td><td>${conversion.initialLiters === null ? "-" : formatNumber(conversion.initialLiters)}</td><td>${conversion.finalLiters === null ? "-" : formatNumber(conversion.finalLiters)}</td><td>${conversion.measuredLiters === null ? "-" : formatNumber(conversion.measuredLiters)}</td><td>${conversion.diffLiters === null ? "-" : formatNumber(conversion.diffLiters)}</td><td>${conversion.diffPercent === null ? "-" : formatNumber(conversion.diffPercent * 100)}%</td><td><span class="badge ${item.status === "Com divergência" ? "bad" : item.status === "Dentro da tolerância" ? "ok" : "info"}">${item.status}</span></td><td><button class="icon-btn" data-action="diesel-detail" data-id="${item.id}">${icon("dashboard")}</button></td></tr>`;
-      }).join("") || `<tr><td colspan="13">Nenhum recebimento encontrado.</td></tr>`}
+        return `<tr><td>${formatDate(item.receivedAt)}</td><td>${item.company}</td><td>${dieselReceivingData.tanks.find((tank) => tank.id === item.tankId)?.name || "-"}</td><td>${item.supplier}</td><td>${item.trailerPlate}</td><td>${formatNumber(item.invoiceLiters)}</td><td>${item.invoiceUnitPrice === null || item.invoiceUnitPrice === undefined ? "-" : formatNumber(item.invoiceUnitPrice, 4)}</td><td>${conversion.initialLiters === null ? "-" : formatNumber(conversion.initialLiters)}</td><td>${conversion.finalLiters === null ? "-" : formatNumber(conversion.finalLiters)}</td><td>${conversion.measuredLiters === null ? "-" : formatNumber(conversion.measuredLiters)}</td><td>${conversion.diffLiters === null ? "-" : formatNumber(conversion.diffLiters)}</td><td>${conversion.diffPercent === null ? "-" : formatNumber(conversion.diffPercent * 100)}%</td><td><span class="badge ${item.status === "Com divergência" ? "bad" : item.status === "Dentro da tolerância" ? "ok" : "info"}">${item.status}</span></td><td><button class="icon-btn" data-action="diesel-detail" data-id="${item.id}">${icon("dashboard")}</button></td></tr>`;
+      }).join("") || `<tr><td colspan="14">Nenhum recebimento encontrado.</td></tr>`}
     </tbody></table></section>
   `;
 }
@@ -2057,6 +2058,7 @@ function renderDieselReceiptDetail() {
           <div><span>Placa</span><strong>${item.trailerPlate}</strong></div>
           <div><span>Nota fiscal</span><strong>${item.invoiceNumber}</strong></div>
           <div><span>NF litros</span><strong>${formatNumber(item.invoiceLiters)}</strong></div>
+          <div><span>Preço unitário NF</span><strong>${item.invoiceUnitPrice === null || item.invoiceUnitPrice === undefined ? "-" : `R$ ${formatNumber(item.invoiceUnitPrice, 4)}/L`}</strong></div>
           <div><span>Inicial</span><strong>${item.initialMm} mm / ${conversion.initialLiters === null ? "-" : formatNumber(conversion.initialLiters)} L</strong></div>
           <div><span>Final</span><strong>${item.finalMm} mm / ${conversion.finalLiters === null ? "-" : formatNumber(conversion.finalLiters)} L</strong></div>
           <div><span>Apurado</span><strong>${conversion.measuredLiters === null ? "-" : formatNumber(conversion.measuredLiters)} L</strong></div>
@@ -3324,6 +3326,7 @@ async function onDieselReceipt(event) {
         supplier: data.supplier,
         invoiceNumber: data.invoiceNumber,
         invoiceLiters: Number(data.invoiceLiters),
+        invoiceUnitPrice: Number(data.invoiceUnitPrice),
         sealedTruckPhoto: await fileToDataUrl(form.sealedTruckPhoto.files[0]),
         initialMm: Number(data.initialMm),
         initialPhoto: await fileToDataUrl(form.initialPhoto.files[0]),
@@ -3414,10 +3417,10 @@ async function onDieselAnalysis(event) {
 }
 
 function exportDieselReceipts() {
-  const header = ["Data", "Empresa", "Tanque", "Fornecedor", "Placa", "Nota", "LitrosNF", "InicialLitros", "FinalLitros", "LitrosApurados", "DiferencaLitros", "DiferencaPercentual", "Status"];
+  const header = ["Data", "Empresa", "Tanque", "Fornecedor", "Placa", "Nota", "LitrosNF", "PrecoUnitarioR$/L", "InicialLitros", "FinalLitros", "LitrosApurados", "DiferencaLitros", "DiferencaPercentual", "Status"];
   const rows = filteredDieselReceipts().map((item) => {
     const conversion = dieselReceiptConversion(item);
-    return [formatDate(item.receivedAt), item.company, dieselReceivingData.tanks.find((tank) => tank.id === item.tankId)?.name || "", item.supplier, item.trailerPlate, item.invoiceNumber, item.invoiceLiters, conversion.initialLiters ?? "", conversion.finalLiters ?? "", conversion.measuredLiters ?? "", conversion.diffLiters ?? "", conversion.diffPercent === null ? "" : conversion.diffPercent * 100, item.status];
+    return [formatDate(item.receivedAt), item.company, dieselReceivingData.tanks.find((tank) => tank.id === item.tankId)?.name || "", item.supplier, item.trailerPlate, item.invoiceNumber, item.invoiceLiters, item.invoiceUnitPrice ?? "", conversion.initialLiters ?? "", conversion.finalLiters ?? "", conversion.measuredLiters ?? "", conversion.diffLiters ?? "", conversion.diffPercent === null ? "" : conversion.diffPercent * 100, item.status];
   });
   const csv = [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(";")).join("\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });

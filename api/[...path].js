@@ -203,6 +203,7 @@ function mapDieselReceipt(row) {
     supplier: row.supplier,
     invoiceNumber: row.invoice_number,
     invoiceLiters: Number(row.invoice_liters || 0),
+    invoiceUnitPrice: row.invoice_unit_price === null || row.invoice_unit_price === undefined ? null : Number(row.invoice_unit_price),
     sealedTruckPhoto: row.sealed_truck_photo_url || "",
     initialMm: Number(row.initial_mm || 0),
     initialLiters: row.initial_liters === null ? null : Number(row.initial_liters || 0),
@@ -1003,6 +1004,7 @@ async function handle(req, res) {
       return send(res, 400, { error: "Preencha todos os campos obrigatorios do recebimento." });
     }
     if (Number(body.invoiceLiters) <= 0) return send(res, 400, { error: "Quantidade da nota fiscal precisa ser maior que zero." });
+    if (!Number.isFinite(Number(body.invoiceUnitPrice)) || Number(body.invoiceUnitPrice) <= 0) return send(res, 400, { error: "Valor unitário do diesel precisa ser maior que zero." });
     if (Number(body.finalMm) < Number(body.initialMm)) return send(res, 400, { error: "Medicao final nao pode ser menor que a inicial." });
     const calc = await calculateDieselReceipt(body);
     const [sealedTruckPhoto, initialPhoto, finalPhoto] = await Promise.all([
@@ -1021,6 +1023,7 @@ async function handle(req, res) {
         supplier: body.supplier,
         invoice_number: body.invoiceNumber,
         invoice_liters: body.invoiceLiters,
+        invoice_unit_price: body.invoiceUnitPrice,
         sealed_truck_photo_url: sealedTruckPhoto,
         initial_mm: body.initialMm,
         initial_liters: calc.initialLiters,
