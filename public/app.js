@@ -1251,7 +1251,7 @@ function renderSidebar(user) {
 
 function pageMeta() {
   const data = {
-    dashboard: ["Dashboard", "Indicadores, alertas e conciliação do diesel."],
+    dashboard: ["Dashboard", "Indicadores de abastecimento, alertas de consumo e conciliação das bombas."],
     fuelings: ["Abastecimentos", "Histórico com médias, alertas e exportação."],
     "diesel-receiving": ["Recebimento de Diesel", "Recebimento por carreta, régua e divergências."],
     closings: ["Encerrantes", "Controle inicial e final das bombas."],
